@@ -1,0 +1,35 @@
+{
+  "name": "floating-schedule",
+  "productName": "悬浮课表",
+  "version": "0.1.0",
+  "description": "桌面悬浮课程表（自用绿色便携版）",
+  "author": "floating-schedule",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win portable --x64"
+  },
+  "build": {
+    "appId": "com.floating.schedule",
+    "productName": "悬浮课表",
+    "artifactName": "FloatingSchedule-${version}-portable.${ext}",
+    "files": [
+      "src/**/*",
+      "assets/**/*"
+    ],
+    "win": {
+      "target": [
+        "portable"
+      ],
+      "icon": "assets/icon.ico",
+      "executableName": "FloatingSchedule"
+    }
+  },
+  "devDependencies": {
+    "electron": "^44.1.1",
+    "electron-builder": "^26.15.3"
+  },
+  "dependencies": {
+    "koffi": "^3.2.0"
+  }
+}

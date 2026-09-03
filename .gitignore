@@ -1,0 +1,11 @@
+# 用户本地课表与运行数据
+schedule.json
+schedule.bak
+
+# 可再生构建产物与依赖
+dist/
+node_modules/
+
+# 开发期截图与临时文件
+dev-*.png
+*.tmp

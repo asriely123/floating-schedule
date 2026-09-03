@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>悬浮课表</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <header id="app-header">
+      <span id="title">悬浮课表</span>
+      <span id="week-label">第 1 周 ／ 共 20 周</span>
+      <span class="spacer"></span>
+      <button id="btn-copy" class="btn-light" title="把上一周的内容复制到本周">复制上周</button>
+      <button id="btn-prev" class="btn-light btn-arrow" title="上一周">◀</button>
+      <button id="btn-next" class="btn-light btn-arrow" title="下一周">▶</button>
+      <button id="btn-today" class="btn-light" title="回到本周">回本周</button>
+      <button id="btn-settings" class="btn-icon" title="设置">⚙</button>
+    </header>
+    <div id="hint" hidden></div>
+    <div id="save-status" role="status" aria-live="polite" hidden></div>
+    <main id="scroll">
+      <div class="head-row" id="head-row"></div>
+      <div id="grid-body"></div>
+    </main>
+    <div id="settings-overlay" hidden>
+      <div id="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title" tabindex="-1">
+        <div id="settings-head">
+          <span id="settings-title">设置</span>
+          <button id="btn-settings-close" class="btn-icon" title="关闭">✕</button>
+        </div>
+        <div id="settings-body">
+          <div class="settings-row">
+            <label for="set-periods">每天课数</label>
+            <input id="set-periods" type="number" min="4" max="14" />
+          </div>
+          <div class="settings-row settings-col">
+            <label>节次时间</label>
+            <div id="set-times"></div>
+            <button id="btn-add-period" class="btn-light">＋ 添加一节</button>
+          </div>
+          <div class="settings-row">
+            <label for="set-weeks">总周数</label>
+            <input id="set-weeks" type="number" min="1" max="30" />
+          </div>
+          <div class="settings-row">
+            <label for="set-semester-start">开学日期</label>
+            <input id="set-semester-start" type="date" />
+          </div>
+          <div class="settings-row">
+            <label for="set-opacity">不透明度</label>
+            <input id="set-opacity" type="range" min="0.5" max="1" step="0.05" />
+            <span id="opacity-value">65%</span>
+          </div>
+          <div class="settings-row">
+            <label for="set-autostart">开机自启</label>
+            <input id="set-autostart" type="checkbox" />
+          </div>
+        </div>
+        <div class="settings-actions">
+          <button id="btn-quit" class="btn-light btn-quit" title="退出程序">退出程序</button>
+          <span class="spacer"></span>
+          <button id="btn-settings-cancel" class="btn-light">取消</button>
+          <button id="btn-settings-save" class="btn-primary">保存</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

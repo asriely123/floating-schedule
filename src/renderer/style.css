@@ -1,0 +1,364 @@
+/* 悬浮课表 · 样式标准见 docs\03-设计规范.md */
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body, #app { height: 100%; }
+
+body {
+  font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  color: #2E475D;
+  background: transparent; /* 透出 Acrylic 材质 */
+  user-select: none;
+  overflow: hidden;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  margin: 8px; /* 微缩一圈，露出 CSS 阴影，卡片悬浮感 */
+  height: calc(100% - 16px);
+  padding: 10px 12px 12px;
+  background: rgba(214, 232, 248, var(--alpha, 0.65)); /* 窗口底色：淡蓝半透明（透明窗口方案） */
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  border-radius: 12px;
+  box-shadow: 0 6px 24px rgba(31, 55, 86, 0.22); /* 透明窗口无系统阴影，CSS 补 */
+}
+
+/* ---------- 顶栏（拖拽区） ---------- */
+
+#app-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 2px 4px 8px;
+  -webkit-app-region: drag; /* 顶栏 = 拖拽区，按钮必须 no-drag */
+}
+
+#title { font-size: 13px; color: #5B7A99; }
+#week-label { font-size: 14px; font-weight: 600; }
+
+.spacer { flex: 1; }
+
+.btn-icon {
+  -webkit-app-region: no-drag;
+  width: 26px;
+  height: 26px;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.55);
+  color: #5B7A99;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.btn-icon:hover {
+  background: rgba(255, 255, 255, 0.9);
+  color: #2E5FA3;
+  border-color: #4A90D9;
+}
+.btn-icon:focus-visible,
+.btn-light:focus-visible,
+.btn-primary:focus-visible,
+.time-row-del:focus-visible,
+.cell:focus-visible {
+  outline: 2px solid #4A90D9;
+  outline-offset: 2px;
+}
+
+/* ---------- 网格 ---------- */
+
+#scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+#scroll::-webkit-scrollbar { width: 6px; }
+#scroll::-webkit-scrollbar-thumb { background: rgba(61, 90, 128, 0.25); border-radius: 3px; }
+
+/* 行高随窗口高度均分：短课表占满高度，超高自动滚动 */
+#grid-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.head-row {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: 76px repeat(5, 1fr);
+  gap: 6px;
+  padding-bottom: 6px;
+  background: rgba(214, 232, 248, 0.92);
+  backdrop-filter: blur(6px);
+}
+
+.time-head {
+  align-self: center;
+  text-align: center;
+  font-size: 12px;
+  color: #5B7A99;
+}
+
+.day-head {
+  padding: 5px 0;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.55);
+  text-align: center;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.cell-row {
+  flex: 1 1 auto;
+  min-height: 44px;
+  display: grid;
+  grid-template-columns: 76px repeat(5, 1fr);
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  min-height: 36px;
+  padding: 4px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.55);
+  font-size: 13px;
+  word-break: break-all;
+  white-space: pre-wrap;
+  -webkit-app-region: no-drag; /* 格子可点（编辑），必须排除出拖拽区 */
+}
+
+.cell:hover { background: rgba(255, 255, 255, 0.9); }
+
+.cell.time {
+  flex-direction: column;
+  gap: 1px;
+  border: none;
+  background: transparent;
+  color: #5B7A99;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.cell.time span { font-weight: 400; }
+
+.cell.empty:hover::after {
+  content: '+';
+  color: rgba(91, 122, 153, 0.4);
+  font-size: 15px;
+}
+
+/* ---------- 当前天 / 当前节高亮（F10） ---------- */
+
+.cell {
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+
+.day-head.today {
+  background: rgba(74, 144, 217, 0.16);
+  color: #2E5FA3;
+}
+
+.cell.today { background: rgba(74, 144, 217, 0.16); }
+.cell.today:hover { background: rgba(74, 144, 217, 0.24); }
+
+.cell.now {
+  background: #4A90D9;
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.9);
+}
+.cell.now:hover { background: #3d7dc4; }
+.cell.now.empty::after,
+.cell.now.empty:hover::after { content: none; }
+
+.cur-week { color: #4A90D9; font-size: 12px; }
+
+/* ---------- 顶栏按钮 ---------- */
+
+.btn-light {
+  -webkit-app-region: no-drag;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.55);
+  color: #5B7A99;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.btn-light:hover {
+  background: rgba(255, 255, 255, 0.9);
+  color: #2E5FA3;
+  border-color: #4A90D9;
+}
+.btn-light:disabled {
+  opacity: 0.35;
+  pointer-events: none;
+}
+.btn-arrow { width: 26px; padding: 0; }
+
+/* ---------- 提示条 ---------- */
+
+#hint {
+  font-size: 12px;
+  color: #5B7A99;
+  text-align: center;
+  padding: 4px 0 6px;
+}
+
+/* ---------- 格子内联编辑 ---------- */
+
+.cell.editing {
+  border-color: #4A90D9;
+  border-width: 1.5px;
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.cell-editor {
+  width: 100%;
+  height: 100%;
+  min-height: 28px;
+  border: none;
+  outline: none;
+  background: transparent;
+  font-family: inherit;
+  font-size: 13px;
+  color: #2E475D;
+  text-align: center;
+  user-select: text;
+  resize: none;
+  line-height: 1.35;
+}
+
+#save-status {
+  padding: 0 4px 6px;
+  color: #a54444;
+  font-size: 12px;
+  text-align: center;
+}
+
+/* ---------- 设置浮层 ---------- */
+
+#settings-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  padding: 12px;
+  background: rgba(46, 71, 93, 0.28);
+  border-radius: 12px;
+}
+#settings-overlay[hidden] { display: none; }
+
+#settings-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  border-radius: 10px;
+}
+
+#settings-head { display: flex; flex: 0 0 auto; align-items: center; padding: 12px 14px 10px; }
+#settings-head span { flex: 1; font-size: 14px; font-weight: 600; }
+
+#settings-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 14px;
+  overflow-y: auto;
+}
+
+.settings-row { display: flex; align-items: center; gap: 8px; }
+.settings-row > label { flex: 0 0 60px; font-size: 13px; font-weight: 500; color: #2E475D; }
+.settings-row > input[type="number"],
+.settings-row > input[type="date"] {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid rgba(61, 90, 128, 0.25);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.9);
+  color: #2E475D;
+  font-size: 13px;
+  font-family: inherit;
+  user-select: text;
+}
+.settings-row > input:focus { outline: none; border-color: #4A90D9; }
+.settings-row > input[type="range"] { flex: 1; accent-color: #4A90D9; }
+.settings-row > input[type="checkbox"] { width: 16px; height: 16px; accent-color: #4A90D9; }
+
+.settings-col { flex-direction: column; align-items: stretch; }
+#set-times { display: flex; flex-direction: column; gap: 6px; }
+.time-row {
+  display: grid;
+  grid-template-columns: 52px 1fr 1fr 24px;
+  gap: 6px;
+  align-items: center;
+}
+.time-row-label { font-size: 12px; color: #5B7A99; }
+.time-row input {
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid rgba(61, 90, 128, 0.25);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.9);
+  color: #2E475D;
+  font-size: 12px;
+  font-family: inherit;
+  user-select: text;
+}
+.time-row input:focus { outline: none; border-color: #4A90D9; }
+.time-row-del {
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #5B7A99;
+  font-size: 12px;
+  cursor: pointer;
+}
+.time-row-del:hover { background: rgba(74, 144, 217, 0.15); color: #2E5FA3; }
+#btn-add-period { align-self: flex-start; }
+
+.settings-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 10px 14px 12px;
+  border-top: 1px solid rgba(61, 90, 128, 0.12);
+}
+.btn-primary {
+  height: 26px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 6px;
+  background: #4A90D9;
+  color: #fff;
+  font-size: 13px;
+  cursor: pointer;
+}
+.btn-primary:hover { background: #3d7dc4; }
+.btn-quit { color: #b45f5f; }
+.btn-quit:hover { border-color: #d09a9a; background: rgba(255, 255, 255, 0.9); color: #a54444; }
