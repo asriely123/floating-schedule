@@ -9,3 +9,4 @@ node_modules/
 # 开发期截图与临时文件
 dev-*.png
 *.tmp
+.isolated-e2e-*/

@@ -4,6 +4,20 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 
+// Windows GUI 子进程的标准输出可能已关闭；日志绝不能使主进程崩溃。
+function writeTestLog(level, args) {
+  if (!process.env.SCHEDULE_LOG_FILE) return;
+  try {
+    fs.appendFileSync(process.env.SCHEDULE_LOG_FILE, `[${level}] ${args.map(String).join(' ')}\n`, 'utf8');
+  } catch {}
+}
+function logMain(...args) { writeTestLog('INFO', args); try { console.log(...args); } catch {} }
+function warnMain(...args) { writeTestLog('WARN', args); try { console.warn(...args); } catch {} }
+function errorMain(...args) { writeTestLog('ERROR', args); try { console.error(...args); } catch {} }
+for (const stream of [process.stdout, process.stderr]) {
+  stream?.on('error', () => {});
+}
+
 const GAP = 24; // 距工作区右下角边距
 const MIN_W = 460, MIN_H = 320, DEF_W = 640, DEF_H = 480;
 
@@ -39,6 +53,7 @@ const DEFAULT_DATA = {
 let resolvedDataDir = null;
 
 function preferredDataDir() {
+  if (process.env.SCHEDULE_TEST_DATA_DIR) return process.env.SCHEDULE_TEST_DATA_DIR;
   if (app.isPackaged) {
     if (process.env.PORTABLE_EXECUTABLE_DIR) return process.env.PORTABLE_EXECUTABLE_DIR;
     return path.dirname(process.execPath);
@@ -63,7 +78,7 @@ function dataDir() {
   const fallback = app.getPath('userData');
   fs.mkdirSync(fallback, { recursive: true });
   if (!isWritableDir(fallback)) throw new Error('程序目录与用户数据目录均不可写');
-  console.warn('[store] 程序目录不可写，已回退到用户数据目录:', fallback);
+  warnMain('[store] 程序目录不可写，已回退到用户数据目录:', fallback);
   return (resolvedDataDir = fallback);
 }
 
@@ -97,8 +112,9 @@ function isTime(value) {
 
 function isValidDate(value) {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
-  const date = new Date(value + 'T00:00:00');
-  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+  const [year, month, day] = value.split('-').map(Number);
+  const date = new Date(year, month - 1, day);
+  return date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day;
 }
 
 function normalizeStore(raw) {
@@ -175,7 +191,7 @@ function loadStore() {
 
   const backup = readStoreFile(backupFile());
   if (backup) {
-    console.warn('[store] 主数据文件不可读，已从 schedule.bak 恢复');
+    warnMain('[store] 主数据文件不可读，已从 schedule.bak 恢复');
     return normalizeStore(backup);
   }
   // 文件缺失或损坏：重建默认值，不崩溃
@@ -200,7 +216,7 @@ function saveStoreQuietly(store, context) {
   try {
     return saveStore(store);
   } catch (error) {
-    console.error(`[store] ${context}保存失败:`, error.message);
+    errorMain(`[store] ${context}保存失败:`, error.message);
     return null;
   }
 }
@@ -214,6 +230,7 @@ function runStoreSelfCheck() {
       settings: {
         periodsPerDay: 99,
         weekCount: 0,
+        semesterStart: '2026-09-07',
         periodTimes: [{ start: '99:99', end: '08:45' }],
         opacity: 9,
       },
@@ -223,6 +240,7 @@ function runStoreSelfCheck() {
     });
     const normalized = saved.settings.periodsPerDay === 14 &&
       saved.settings.weekCount === 1 &&
+      saved.settings.semesterStart === '2026-09-07' &&
       saved.settings.opacity === 1 &&
       saved.settings.periodTimes[0].start === '' &&
       saved.settings.periodTimes[0].end === '08:45' &&
@@ -235,7 +253,7 @@ function runStoreSelfCheck() {
     const recovered = loadStore();
     const backupRecovered = recovered.weeks[1]?.[0]?.[0] === '数据结构';
     if (!normalized || !backupRecovered) throw new Error('数据归一化或备份恢复断言失败');
-    console.log('[STORE-E2E] PASS normalize-and-backup-recovery');
+    logMain('[STORE-E2E] PASS normalize-and-backup-recovery');
   } finally {
     resolvedDataDir = originalDataDir;
     fs.rmSync(testDir, { recursive: true, force: true });
@@ -286,7 +304,7 @@ try {
     'int SetWindowPos(void* hWnd, void* hWndInsertAfter, int X, int Y, int cx, int cy, unsigned int uFlags)'
   );
 } catch (e) {
-  console.warn('[Z] koffi 不可用，窗口将不置底:', e.message);
+  warnMain('[Z] koffi 不可用，窗口将不置底:', e.message);
 }
 
 let zLogged = false;
@@ -295,9 +313,9 @@ function pinToBottom() {
   try {
     // HWND_BOTTOM(1) + SWP_NOMOVE(0x2)|SWP_NOSIZE(0x1)|SWP_NOACTIVATE(0x10)
     SetWindowPos(win.getNativeWindowHandle(), 1, 0, 0, 0, 0, 0x13);
-    if (!zLogged) { zLogged = true; console.log('[Z] window pinned to bottom (desktop-widget mode)'); }
-  } catch (e) {
-    console.error('[Z] pinToBottom failed:', e);
+    zLogged = true;
+  } catch {
+    // 置底失败时静默降级；GUI 程序可能没有可写的标准输出，不能因日志再触发 EPIPE。
   }
 }
 
@@ -331,7 +349,7 @@ function createWindow() {
 
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   win.once('ready-to-show', () => win.show());
-  console.log('[MAT] window mode=transparent (acrylic 诊断记录见开发日志)');
+  logMain('[MAT] window mode=transparent (acrylic 诊断记录见开发日志)');
 
   // 桌面挂件置底：显示后与失焦时压到底层（点击窗口可临时前置编辑，失焦自动回落）
   win.on('show', () => setTimeout(pinToBottom, 150));
@@ -360,7 +378,7 @@ function createWindow() {
     }
   });
 
-  console.log(
+  logMain(
     '[WIN] bounds=' + JSON.stringify(win.getBounds()) +
     (restored ? ' (restored)' : ' (default bottom-right)')
   );
@@ -391,14 +409,14 @@ async function runShotSelfCheck() {
         if (process.env.SCHEDULE_TEST_RESIZE) {
           win.setSize(700, 520); // 验证 resize 事件触发位置保存
           await new Promise((r) => setTimeout(r, 900));
-          console.log('[SHOT] resized to ' + JSON.stringify(win.getBounds()));
+          logMain('[SHOT] resized to ' + JSON.stringify(win.getBounds()));
         }
         await win.webContents.executeJavaScript(
           'document.body.style.background = "#9fb8d0";' // 模拟桌面底色便于查看半透明效果
         );
         const img = await win.webContents.capturePage();
         fs.writeFileSync(path.join(shotDir(), 'dev-screenshot.png'), img.toPNG());
-        console.log('[SHOT] ' + JSON.stringify(checks));
+        logMain('[SHOT] ' + JSON.stringify(checks));
         if (process.env.SCHEDULE_E2E) {
           await runPhase2E2E();
           await runPhase3E2E();
@@ -408,7 +426,7 @@ async function runShotSelfCheck() {
         // 截取真实屏幕：验证半透明/磨砂的实际观感（整屏 + 窗口区域）
         const { desktopCapturer } = require('electron');
         const scale = screen.getPrimaryDisplay().scaleFactor || 1;
-        console.log('[SHOT] scaleFactor=' + scale + ' display=' + JSON.stringify(screen.getPrimaryDisplay().size));
+        logMain('[SHOT] scaleFactor=' + scale + ' display=' + JSON.stringify(screen.getPrimaryDisplay().size));
         const srcs = await desktopCapturer.getSources({
           types: ['screen'],
           thumbnailSize: screen.getPrimaryDisplay().size,
@@ -424,7 +442,7 @@ async function runShotSelfCheck() {
             height: Math.round(b.height * scale) + pad * 2,
           });
           fs.writeFileSync(path.join(shotDir(), 'dev-screen-crop.png'), crop.toPNG());
-          console.log('[SHOT] screen-crop saved, thumbnail=' + JSON.stringify(srcs[0].thumbnail.getSize()));
+          logMain('[SHOT] screen-crop saved, thumbnail=' + JSON.stringify(srcs[0].thumbnail.getSize()));
         }
 
         // 设置浮层可打开性断言（截图后再开，避免遮住网格图）
@@ -434,7 +452,7 @@ async function runShotSelfCheck() {
           const opened = window.__settingsClicked === true;
           return opened && visible;
         })()`);
-        console.log('[SHOT] settingsOpen=' + settingsOk);
+        logMain('[SHOT] settingsOpen=' + settingsOk);
         if (settingsOk) {
           await new Promise((r) => setTimeout(r, 300)); // 等浮层完成一帧渲染
           const img2 = await win.webContents.capturePage();
@@ -442,7 +460,7 @@ async function runShotSelfCheck() {
           await win.webContents.executeJavaScript(`document.getElementById('btn-settings-close').click()`);
         }
       } catch (e) {
-        console.error('[SHOT] failed:', e);
+        errorMain('[SHOT] failed:', e);
       }
       app.quit();
     }, 1200);
@@ -466,7 +484,7 @@ function restoreDefaultPosition() {
   const s = loadStore();
   s.window = win.getBounds();
   saveStoreQuietly(s, '恢复默认位置');
-  console.log('[WIN] restored default position: ' + JSON.stringify(win.getBounds()));
+  logMain('[WIN] restored default position: ' + JSON.stringify(win.getBounds()));
 }
 
 function createTray() {
@@ -487,7 +505,7 @@ function createTray() {
 async function runPhase2E2E() {
   const js = (code) => win.webContents.executeJavaScript(code);
   const log = (name, ok, detail) =>
-    console.log(`[E2E] ${ok ? 'PASS' : 'FAIL'} ${name}${detail !== undefined ? ' -> ' + detail : ''}`);
+    logMain(`[E2E] ${ok ? 'PASS' : 'FAIL'} ${name}${detail !== undefined ? ' -> ' + detail : ''}`);
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   try {
     // 启动周恢复断言（SCHEDULE_EXPECT_WEEK=2 时校验从磁盘恢复的是第 2 周）
@@ -496,7 +514,7 @@ async function runPhase2E2E() {
       log('initial-restore-week' + process.env.SCHEDULE_EXPECT_WEEK,
         initialLabel.includes(`第 ${process.env.SCHEDULE_EXPECT_WEEK} 周`), initialLabel);
     } else {
-      console.log('[E2E] initial-week -> ' + initialLabel);
+      logMain('[E2E] initial-week -> ' + initialLabel);
     }
     // 归一到第 1 周，保证后续断言确定性
     for (let i = 0; i < 40; i++) {
@@ -508,16 +526,30 @@ async function runPhase2E2E() {
     const weekLabel = await js(`document.getElementById('week-label').textContent`);
     log('nav-to-week2', weekLabel.includes('第 2 周'), weekLabel);
 
-    await js(`document.querySelectorAll('.cell:not(.time)')[0].dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+    const editStart = await js(`(() => {
+      try {
+        const cell = document.querySelectorAll('.cell:not(.time)')[0];
+        cell.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+        const editor = document.querySelector('.cell-editor');
+        return { ok: !!editor, active: document.activeElement?.className || '' };
+      } catch (error) {
+        return { ok: false, error: String(error), stack: error.stack };
+      }
+    })()`);
+    log('start-edit-week2', editStart.ok, JSON.stringify(editStart));
+    if (!editStart.ok) throw new Error(editStart.error || '编辑器未出现');
     await js(`(() => {
       const i = document.querySelector('.cell-editor');
-      i.value = '高等数学\n习题课';
+      i.value = ['高等数学', '习题课'].join(String.fromCharCode(10));
       i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
       return true;
     })()`);
     await wait(400); // 等保存落盘
     log('edit-week2-multiline-cell',
-      (await js(`document.querySelectorAll('.cell:not(.time)')[0].textContent`)) === '高等数学\n习题课');
+      await js(`(() => {
+        const text = document.querySelectorAll('.cell:not(.time)')[0].textContent;
+        return text === ['高等数学', '习题课'].join(String.fromCharCode(10));
+      })()`));
 
     await js(`document.getElementById('btn-next').click()`);
     log('week3-independent',
@@ -525,14 +557,33 @@ async function runPhase2E2E() {
 
     await js(`window.confirm = () => true; document.getElementById('btn-copy').click()`);
     log('copy-prev-week',
-      (await js(`document.querySelectorAll('.cell:not(.time)')[0].textContent`)) === '高等数学\n习题课');
+      await js(`(() => {
+        const text = document.querySelectorAll('.cell:not(.time)')[0].textContent;
+        return text === ['高等数学', '习题课'].join(String.fromCharCode(10));
+      })()`));
 
-    await js(`document.getElementById('btn-today').click()`);
-    log('back-to-today', (await js(`document.getElementById('week-label').textContent`)).includes('第 1 周'));
+    await js(`document.querySelectorAll('.cell:not(.time)')[0].dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+    log('copy-then-edit', await js(`document.activeElement.classList.contains('cell-editor')`));
+    await js(`(() => {
+      const i = document.querySelector('.cell-editor');
+      i.value = '复制后可编辑';
+      i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    })()`);
+    await wait(200);
+    log('copy-then-edit-saved',
+      (await js(`document.querySelectorAll('.cell:not(.time)')[0].textContent`)) === '复制后可编辑');
+
+    const todayDisabled = await js(`document.getElementById('btn-today').disabled`);
+    if (todayDisabled) {
+      log('back-to-today-disabled-without-semester', true);
+    } else {
+      await js(`document.getElementById('btn-today').click()`);
+      log('back-to-today', (await js(`document.getElementById('week-label').textContent`)).includes('第 1 周'));
+    }
 
     await js(`document.getElementById('btn-next').click()`); // 结束在周 2：供下一次运行的恢复断言
   } catch (e) {
-    console.error('[E2E] failed:', e);
+    errorMain('[E2E] failed:', e);
   }
 }
 
@@ -541,7 +592,7 @@ async function runPhase2E2E() {
 async function runPhase3E2E() {
   const js = (code) => win.webContents.executeJavaScript(code);
   const log = (name, ok, detail) =>
-    console.log(`[E2E3] ${ok ? 'PASS' : 'FAIL'} ${name}${detail !== undefined ? ' -> ' + detail : ''}`);
+    logMain(`[E2E3] ${ok ? 'PASS' : 'FAIL'} ${name}${detail !== undefined ? ' -> ' + detail : ''}`);
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   const eq = (a, b) => a === b;
   try {
@@ -595,7 +646,7 @@ async function runPhase3E2E() {
       eq(await js(`document.getElementById('set-semester-start').value`), '2026-09-07'));
     await js(`document.getElementById('btn-settings-cancel').click()`);
   } catch (e) {
-    console.error('[E2E3] failed:', e);
+    errorMain('[E2E3] failed:', e);
   }
 }
 
@@ -604,7 +655,7 @@ async function runPhase3E2E() {
 async function runPhase4E2E() {
   const js = (code) => win.webContents.executeJavaScript(code);
   const log = (name, ok, detail) =>
-    console.log(`[E2E4] ${ok ? 'PASS' : 'FAIL'} ${name}${detail !== undefined ? ' -> ' + detail : ''}`);
+    logMain(`[E2E4] ${ok ? 'PASS' : 'FAIL'} ${name}${detail !== undefined ? ' -> ' + detail : ''}`);
   try {
     const r = await js(`(() => {
       window.__refreshHighlight(); // 先刷新，消除测试与渲染之间的时间差
@@ -641,13 +692,14 @@ async function runPhase4E2E() {
     log('current-period' + (r.nowP >= 0 ? '-p' + (r.nowP + 1) : '-none'), okNow,
       'now=' + JSON.stringify(r.nowCells));
   } catch (e) {
-    console.error('[E2E4] failed:', e);
+    errorMain('[E2E4] failed:', e);
   }
 }
 
 /* ---------- 生命周期 ---------- */
 
-const gotLock = app.requestSingleInstanceLock();
+// 隔离 E2E 使用独立用户目录，不与用户正在运行的实例争抢锁。
+const gotLock = process.env.SCHEDULE_ISOLATED_E2E ? true : app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {
@@ -663,7 +715,7 @@ if (!gotLock) {
         runStoreSelfCheck();
       } catch (error) {
         process.exitCode = 1;
-        console.error('[STORE-E2E] FAIL:', error.message);
+        errorMain('[STORE-E2E] FAIL:', error.message);
       }
       app.quit();
       return;
@@ -674,11 +726,11 @@ if (!gotLock) {
       try {
         app.setLoginItemSettings({ openAtLogin: true, path: process.execPath });
         const on = app.getLoginItemSettings().openAtLogin;
-        console.log('[AUTOSTART] enable -> ' + on + ' path=' + process.execPath);
+        logMain('[AUTOSTART] enable -> ' + on + ' path=' + process.execPath);
         app.setLoginItemSettings({ openAtLogin: false, path: process.execPath });
-        console.log('[AUTOSTART] disable -> ' + app.getLoginItemSettings().openAtLogin);
+        logMain('[AUTOSTART] disable -> ' + app.getLoginItemSettings().openAtLogin);
       } catch (e) {
-        console.error('[AUTOSTART] failed:', e);
+        errorMain('[AUTOSTART] failed:', e);
       }
     }
 

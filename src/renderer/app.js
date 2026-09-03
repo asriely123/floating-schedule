@@ -525,6 +525,7 @@ function goWeek(n) {
 function copyPrevWeek() {
   if (viewWeek <= 1) return;
   if (!window.confirm('复制上一周将覆盖本周现有课程，是否继续？')) return;
+  if (editingKey !== null) commitEdit();
   const prev = data.weeks[viewWeek - 1] || {};
   data.weeks[viewWeek] = JSON.parse(JSON.stringify(prev));
   void saveData().catch(() => {});
