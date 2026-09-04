@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
   version: process.versions.electron,
+  testMode: process.env.SCHEDULE_TEST_MODE === '1',
   load: () => ipcRenderer.invoke('store:load'),
   save: (data) => ipcRenderer.invoke('store:save', data),
   quit: () => ipcRenderer.invoke('app:quit'),

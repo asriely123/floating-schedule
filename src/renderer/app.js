@@ -1,10 +1,15 @@
 // 悬浮课表 · 渲染层：课表渲染 / 编辑 / 翻页 / 复制上周
 const DAY_NAMES = ['周一', '周二', '周三', '周四', '周五'];
 
-let data = null;      // schedule.json 全量（窗口 bounds 字段由主进程维护，渲染层不改）
+let data = null;      // schedule.json 业务快照；保存时主进程会忽略其中的 window 字段
 let viewWeek = 1;     // 当前显示周
 let editingKey = null; // 正在编辑的格子 'day-period'
+let editingWeek = null;
+let editingSavePromise = null;
+let scheduleSaving = false;
 let saveQueue = Promise.resolve();
+let copyConfirmResolve = null;
+let copyConfirmOpener = null;
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -45,16 +50,19 @@ function updateCellAccessibility(cell, day, period, text) {
   cell.setAttribute('aria-label', cellAriaLabel(day, period, text));
 }
 
-function setCellText(week, day, period, text) {
-  if (!data.weeks[week]) data.weeks[week] = {};
-  const arr = data.weeks[week][day] || (data.weeks[week][day] = []);
-  arr[period] = text;
-  void saveData().catch(() => {});
+function cloneStore(store = data) {
+  return JSON.parse(JSON.stringify(store));
 }
 
-function setSaveError(error) {
+function setCellText(store, week, day, period, text) {
+  if (!store.weeks[week]) store.weeks[week] = {};
+  const arr = store.weeks[week][day] || (store.weeks[week][day] = []);
+  arr[period] = text;
+}
+
+function setSaveError(error, action = '保存失败') {
   const status = $('#save-status');
-  status.textContent = `保存失败：${error?.message || '请检查程序目录权限后重试'}`;
+  status.textContent = `${action}：${chineseErrorMessage(error, '请检查程序目录权限后重试')}`;
   status.hidden = false;
 }
 
@@ -65,15 +73,10 @@ function clearSaveError() {
 }
 
 function saveData(store = data) {
-  const request = saveQueue.catch(() => {}).then(() => window.api.save(store));
+  const snapshot = cloneStore(store);
+  const request = saveQueue.catch(() => {}).then(() => window.api.save(snapshot));
   saveQueue = request;
-  return request.then(() => {
-    clearSaveError();
-    return true;
-  }).catch((error) => {
-    setSaveError(error);
-    throw error;
-  });
+  return request;
 }
 
 /* ---------- 渲染 ---------- */
@@ -138,13 +141,23 @@ function renderHeader() {
   $('#week-label').innerHTML =
     `第 ${viewWeek} 周 ／ 共 ${s.weekCount} 周` +
     (isCurrent ? `<span class="cur-week"> · 本周</span>` : '');
-  $('#btn-prev').disabled = viewWeek <= 1;
-  $('#btn-next').disabled = viewWeek >= s.weekCount;
-  $('#btn-copy').disabled = viewWeek <= 1;
-  $('#btn-today').disabled = viewWeek === currentWeek() || !s.semesterStart;
+  $('#btn-prev').disabled = scheduleSaving || viewWeek <= 1;
+  $('#btn-next').disabled = scheduleSaving || viewWeek >= s.weekCount;
+  $('#btn-copy').disabled = scheduleSaving || viewWeek <= 1;
+  $('#btn-today').disabled = scheduleSaving || viewWeek === currentWeek() || !s.semesterStart;
+  $('#btn-settings').disabled = scheduleSaving;
   const hint = $('#hint');
   hint.hidden = !!s.semesterStart;
-  hint.textContent = '尚未设置开学日期，暂以第 1 周显示';
+  const setupButton = $('#btn-set-semester');
+  if (setupButton) setupButton.disabled = scheduleSaving;
+}
+
+function setScheduleBusy(busy) {
+  scheduleSaving = busy;
+  $('#app').setAttribute('aria-busy', String(busy));
+  $('#app').classList.toggle('schedule-saving', busy);
+  $('#grid-body').inert = busy;
+  renderHeader();
 }
 
 function renderAll() {
@@ -156,15 +169,10 @@ function renderAll() {
 
 /* ---------- 当前天 / 当前节高亮（F10，30 秒刷新） ---------- */
 
-function toMin(text) {
-  const [h, m] = String(text).split(':').map(Number);
-  return h * 60 + m;
-}
-
 function refreshHighlight() {
   const d = new Date();
   const dayIndex = (d.getDay() + 6) % 7; // 0=周一 .. 4=周五, 5/6=周末
-  const viewingCurrentWeek = viewWeek === currentWeek();
+  const viewingCurrentWeek = !!data.settings.semesterStart && viewWeek === currentWeek();
   const today = viewingCurrentWeek && dayIndex <= 4 ? dayIndex : -1;
   const minutes = d.getHours() * 60 + d.getMinutes();
 
@@ -175,8 +183,8 @@ function refreshHighlight() {
     for (let i = 0; i < times.length; i++) {
       const t = times[i];
       if (!t || !t.start || !t.end) continue;
-      const s = toMin(t.start);
-      const e = toMin(t.end);
+      const s = timeToMinutes(t.start);
+      const e = timeToMinutes(t.end);
       if (!isNaN(s) && !isNaN(e) && minutes >= s && minutes <= e) nowP = i;
     }
   }
@@ -193,11 +201,16 @@ function refreshHighlight() {
 
 /* ---------- 编辑 ---------- */
 
-function startEdit(cell) {
-  if (editingKey !== null) commitEdit(); // 先提交上一个编辑
+async function startEdit(cell) {
+  if (scheduleSaving || !$('#settings-overlay').hidden || !$('#copy-confirm-overlay').hidden) return;
   const day = +cell.dataset.day;
   const period = +cell.dataset.period;
+  const nextKey = `${day}-${period}`;
+  if (editingKey === nextKey) return;
+  if (editingKey !== null && !(await commitEdit())) return; // 保存成功后再切换格子
+  if (scheduleSaving || editingKey !== null || !cell.isConnected) return;
   editingKey = `${day}-${period}`;
+  editingWeek = viewWeek;
   cell.classList.add('editing');
   cell.classList.remove('empty');
   cell.textContent = '';
@@ -208,45 +221,86 @@ function startEdit(cell) {
   const input = document.createElement('textarea');
   input.className = 'cell-editor';
   input.setAttribute('aria-label', `${DAY_NAMES[day]}第 ${period + 1} 节课程`);
-  input.maxLength = 30;
   input.value = cellText(viewWeek, day, period);
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commitEdit(); }
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void commitEdit(); }
     else if (e.key === 'Escape') { cancelEdit(); }
   });
-  input.addEventListener('blur', () => commitEdit());
+  input.addEventListener('blur', () => { void commitEdit(); });
   cell.appendChild(input);
-  input.focus();
-  input.select();
+  if (editingKey === nextKey && input.isConnected) {
+    input.focus();
+    input.select();
+  }
 }
 
 function activeCell(day, period) {
   return document.querySelector(`.cell[data-day="${day}"][data-period="${period}"]`);
 }
 
+function finishEdit(cell, day, period, text) {
+  editingKey = null;
+  editingWeek = null;
+  if (!cell) return;
+  cell.classList.remove('editing', 'saving');
+  cell.removeAttribute('aria-busy');
+  cell.textContent = text;
+  cell.classList.toggle('empty', !text);
+  updateCellAccessibility(cell, day, period, text);
+  cell.focus();
+}
+
 function commitEdit() {
-  if (editingKey === null) return;
-  const [day, period] = editingKey.split('-').map(Number);
+  if (editingSavePromise) return editingSavePromise;
+  if (editingKey === null) return Promise.resolve(true);
+  const key = editingKey;
+  const week = editingWeek;
+  const [day, period] = key.split('-').map(Number);
   const cell = activeCell(day, period);
   const input = cell && cell.querySelector('.cell-editor');
-  const text = (input && input.value || '').trim();
-  editingKey = null;
-  if (cell) {
-    cell.classList.remove('editing');
-    cell.textContent = text;
-    cell.classList.toggle('empty', !text);
-    updateCellAccessibility(cell, day, period, text);
+  const text = (input?.value || '').trim();
+  const previousText = cellText(week, day, period);
+  if (previousText === text) {
+    finishEdit(cell, day, period, text);
+    return Promise.resolve(true);
   }
-  if (cellText(viewWeek, day, period) !== text) setCellText(viewWeek, day, period, text);
-  input && input.remove();
-  cell && cell.focus();
+
+  const operation = (async () => {
+    input.disabled = true;
+    cell.classList.add('saving');
+    cell.setAttribute('aria-busy', 'true');
+    try {
+      const next = cloneStore(data);
+      setCellText(next, week, day, period, text);
+      const saved = await saveData(next);
+      data = saved;
+      clearSaveError();
+      finishEdit(cell, day, period, text);
+      return true;
+    } catch (error) {
+      setSaveError(error, '课程保存失败');
+      input.disabled = false;
+      cell.classList.remove('saving');
+      cell.removeAttribute('aria-busy');
+      setTimeout(() => {
+        if (editingKey === key && input.isConnected) input.focus();
+      }, 0);
+      return false;
+    }
+  })();
+  editingSavePromise = operation;
+  operation.finally(() => {
+    if (editingSavePromise === operation) editingSavePromise = null;
+  });
+  return operation;
 }
 
 function cancelEdit() {
-  if (editingKey === null) return;
+  if (editingKey === null || editingSavePromise) return;
   const [day, period] = editingKey.split('-').map(Number);
   const cell = activeCell(day, period);
   editingKey = null;
+  editingWeek = null;
   if (cell) {
     cell.classList.remove('editing');
     const text = cellText(viewWeek, day, period);
@@ -264,21 +318,24 @@ function cancelEdit() {
 function bindEvents() {
   $('#grid-body').addEventListener('dblclick', (e) => {
     const cell = e.target.closest('.cell:not(.time)');
-    if (cell) startEdit(cell);
+    if (cell) void startEdit(cell);
   });
   $('#grid-body').addEventListener('keydown', (e) => {
     if (e.target.matches('.cell-editor')) return;
     const cell = e.target.closest('.cell:not(.time)');
     if (cell && (e.key === 'Enter' || e.key === ' ')) {
       e.preventDefault();
-      startEdit(cell);
+      void startEdit(cell);
     }
   });
-  $('#btn-prev').addEventListener('click', () => goWeek(viewWeek - 1));
-  $('#btn-next').addEventListener('click', () => goWeek(viewWeek + 1));
-  $('#btn-today').addEventListener('click', () => goWeek(currentWeek()));
-  $('#btn-copy').addEventListener('click', () => copyPrevWeek());
-  $('#btn-settings').addEventListener('click', () => openSettings());
+  $('#btn-prev').addEventListener('click', () => { void goWeek(viewWeek - 1); });
+  $('#btn-next').addEventListener('click', () => { void goWeek(viewWeek + 1); });
+  $('#btn-today').addEventListener('click', () => { void goWeek(currentWeek()); });
+  $('#btn-copy').addEventListener('click', () => { void copyPrevWeek(); });
+  $('#btn-copy-confirm-cancel').addEventListener('click', () => closeCopyConfirmation(false));
+  $('#btn-copy-confirm-ok').addEventListener('click', () => closeCopyConfirmation(true));
+  $('#btn-settings').addEventListener('click', () => { void openSettings(); });
+  $('#btn-set-semester').addEventListener('click', () => { void openSettings(); });
   $('#btn-settings-close').addEventListener('click', () => closeSettings(false));
   $('#btn-settings-cancel').addEventListener('click', () => closeSettings(false));
   $('#btn-settings-save').addEventListener('click', () => saveSettings());
@@ -294,8 +351,30 @@ function bindEvents() {
     $('#opacity-value').textContent = Math.round(v * 100) + '%';
     document.documentElement.style.setProperty('--alpha', v);
   });
-  $('#set-autostart').addEventListener('change', () => { draft.autoStart = $('#set-autostart').checked; });
   document.addEventListener('keydown', (e) => {
+    const copyOverlay = $('#copy-confirm-overlay');
+    if (!copyOverlay.hidden) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeCopyConfirmation(false);
+        return;
+      }
+      if (e.key === 'Tab') {
+        const first = $('#btn-copy-confirm-cancel');
+        const last = $('#btn-copy-confirm-ok');
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        } else if (![first, last].includes(document.activeElement)) {
+          e.preventDefault();
+          (e.shiftKey ? last : first).focus();
+        }
+      }
+      return;
+    }
     const overlay = $('#settings-overlay');
     if (overlay.hidden) return;
     if (e.key === 'Escape' && !settingsSaving) {
@@ -306,18 +385,52 @@ function bindEvents() {
     if (e.key !== 'Tab') return;
     const focusables = [...$('#settings-panel').querySelectorAll(
       'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-    )];
+    )].filter(isVisibleForFocus);
     if (!focusables.length) return;
     const first = focusables[0];
     const last = focusables[focusables.length - 1];
-    if (e.shiftKey && document.activeElement === first) {
+    const active = document.activeElement;
+    if (!$('#settings-panel').contains(active) || !focusables.includes(active)) {
+      e.preventDefault();
+      (e.shiftKey ? last : first).focus();
+      return;
+    }
+    if (e.shiftKey && active === first) {
       e.preventDefault();
       last.focus();
-    } else if (!e.shiftKey && document.activeElement === last) {
+    } else if (!e.shiftKey && active === last) {
       e.preventDefault();
       first.focus();
     }
   });
+}
+
+function requestCopyConfirmation() {
+  if (copyConfirmResolve) return Promise.resolve(false);
+  copyConfirmOpener = $('#btn-copy');
+  $('#copy-confirm-overlay').hidden = false;
+  $('#btn-copy-confirm-cancel').focus();
+  return new Promise((resolve) => { copyConfirmResolve = resolve; });
+}
+
+function closeCopyConfirmation(confirmed) {
+  if (!copyConfirmResolve) return;
+  const resolve = copyConfirmResolve;
+  const opener = copyConfirmOpener;
+  copyConfirmResolve = null;
+  copyConfirmOpener = null;
+  $('#copy-confirm-overlay').hidden = true;
+  if (opener instanceof HTMLElement && opener.isConnected) opener.focus();
+  resolve(confirmed);
+}
+
+/* Tab 循环只纳入当前确实可见的控件，避免 4/14 节边界的 hidden 控件抢焦点。 */
+function isVisibleForFocus(element) {
+  if (!(element instanceof HTMLElement)) return false;
+  if (element.hidden || element.closest('[hidden], [inert], [aria-hidden="true"]')) return false;
+  const style = window.getComputedStyle(element);
+  return style.display !== 'none' && style.visibility !== 'hidden' && style.visibility !== 'collapse'
+    && element.getClientRects().length > 0;
 }
 
 /* ---------- 设置面板 ---------- */
@@ -336,10 +449,32 @@ function setSettingsBusy(busy) {
     control.disabled = saving;
   });
   $('#set-autostart').disabled = saving || busy || !autoStartResolved;
-  $('#btn-settings-save').disabled = busy || saving;
+  $('#btn-settings-save').disabled = busy || saving || !autoStartResolved;
   $('#btn-settings-close').disabled = settingsSaving;
   $('#btn-settings-cancel').disabled = settingsSaving;
   $('#btn-quit').disabled = settingsSaving;
+  $('#btn-settings-save').textContent = saving ? '保存中…' : '保存';
+  $('#settings-panel').setAttribute('aria-busy', String(saving || busy));
+}
+
+function chineseErrorMessage(error, fallback) {
+  const message = String(error?.message || '').trim();
+  return /[\u3400-\u9fff]/.test(message) ? message : fallback;
+}
+
+function setSettingsError(target, message, error, fallback = '请检查程序目录权限或系统设置后重试') {
+  const status = $(target);
+  const detail = error ? `：${chineseErrorMessage(error, fallback)}` : '';
+  status.textContent = `${message}${detail}`;
+  status.hidden = false;
+}
+
+function clearSettingsError() {
+  ['#settings-error', '#time-error', '#autostart-error'].forEach((target) => {
+    const status = $(target);
+    status.textContent = '';
+    status.hidden = true;
+  });
 }
 
 function timeToMinutes(value) {
@@ -364,15 +499,16 @@ function validatePeriodTimes(times) {
   return '';
 }
 
-function openSettings() {
-  window.__settingsClicked = true;
+async function openSettings() {
+  if (scheduleSaving || !(await commitEdit())) return;
+  if (scheduleSaving || !$('#settings-overlay').hidden) return;
+  if (window.api.testMode) window.__settingsClicked = true;
   settingsOpener = document.activeElement;
   const session = ++settingsSession;
   const s = data.settings;
   draft = {
     periodsPerDay: s.periodsPerDay,
     times: JSON.parse(JSON.stringify(s.periodTimes || [])),
-    autoStart: !!s.autoStart,
     initialAutoStart: !!s.autoStart,
   };
   prevAlpha = s.opacity ?? 0.65;
@@ -382,21 +518,21 @@ function openSettings() {
   $('#set-opacity').value = prevAlpha;
   $('#opacity-value').textContent = Math.round(prevAlpha * 100) + '%';
   rebuildTimeRows();
+  clearSettingsError();
   $('#settings-overlay').hidden = false;
   autoStartLoading = true;
   autoStartResolved = false;
   setSettingsBusy(true);
-  $('#set-autostart').checked = draft.autoStart;
+  $('#set-autostart').checked = draft.initialAutoStart;
   $('#set-periods').focus();
   window.api.getAutoStart().then((v) => {
     if (session !== settingsSession || !draft) return;
-    draft.autoStart = !!v;
     draft.initialAutoStart = !!v;
     $('#set-autostart').checked = !!v;
     autoStartResolved = true;
   }).catch((error) => {
     if (session !== settingsSession || !draft) return;
-    setSaveError(error);
+    setSettingsError('#autostart-error', '读取开机自启失败', error, '请关闭设置后重新打开再试');
   }).finally(() => {
     if (session !== settingsSession || !draft) return;
     autoStartLoading = false;
@@ -431,11 +567,13 @@ function rebuildTimeRows() {
     del.className = 'time-row-del';
     del.textContent = '✕';
     del.title = '删除本节';
+    del.hidden = draft.periodsPerDay <= 4;
     del.addEventListener('click', () => removeTimeRow(i));
     row.append(label, start, end, del);
     wrap.appendChild(row);
   }
   $('#set-periods').value = draft.periodsPerDay;
+  $('#btn-add-period').hidden = draft.periodsPerDay >= 14;
 }
 
 function addTimeRow() {
@@ -467,6 +605,7 @@ function closeSettings(commit) {
 
 async function saveSettings() {
   if (!draft || autoStartLoading || settingsSaving) return;
+  clearSettingsError();
   const next = JSON.parse(JSON.stringify(data));
   const s = next.settings;
   s.periodsPerDay = Math.min(Math.max(+$('#set-periods').value || 8, 4), 14);
@@ -480,7 +619,7 @@ async function saveSettings() {
   // 旧周数据按行补齐/截断
   const timeError = validatePeriodTimes(s.periodTimes);
   if (timeError) {
-    setSaveError(new Error(timeError));
+    setSettingsError('#time-error', '节次时间有误', new Error(timeError));
     return;
   }
   for (const w of Object.keys(next.weeks)) {
@@ -494,42 +633,84 @@ async function saveSettings() {
   if (viewWeek > s.weekCount) next.viewWeek = s.weekCount;
   settingsSaving = true;
   setSettingsBusy(true);
+  let autoStartBeforeSave = null;
+  let autoStartWritten = false;
   try {
     if (autoStartResolved) {
-      const actualAutoStart = await window.api.setAutoStart(s.autoStart);
+      const result = await window.api.setAutoStart(s.autoStart);
+      const actualAutoStart = typeof result === 'object' ? result.current : result;
+      autoStartBeforeSave = typeof result === 'object' ? result.previous : draft.initialAutoStart;
       if (actualAutoStart !== s.autoStart) throw new Error('开机自启状态未能更新');
+      autoStartWritten = true;
     }
-    await saveData(next);
-    data = next;
+    const saved = await saveData(next);
+    data = saved;
     if (viewWeek > s.weekCount) viewWeek = s.weekCount;
     document.documentElement.style.setProperty('--alpha', s.opacity);
+    clearSaveError();
     closeSettings(true);
     renderAll();
   } catch (error) {
-    if (draft && autoStartResolved && draft.initialAutoStart !== s.autoStart) {
-      window.api.setAutoStart(draft.initialAutoStart).catch(() => {});
+    let rollbackError = null;
+    if (draft && autoStartResolved && autoStartWritten && autoStartBeforeSave !== null) {
+      try {
+        const rollbackResult = await window.api.setAutoStart(autoStartBeforeSave);
+        const rolledBack = typeof rollbackResult === 'object' ? rollbackResult.current : rollbackResult;
+        if (rolledBack !== autoStartBeforeSave) throw new Error('开机自启状态未能还原');
+      } catch (rollbackFailure) {
+        rollbackError = rollbackFailure;
+      }
     }
-    setSaveError(error);
+    const action = autoStartWritten ? '设置保存失败' : '无法保存设置';
+    setSettingsError('#settings-error', action, error);
+    if (rollbackError) {
+      setSettingsError('#settings-error', `${action}；开机自启状态回退失败`, rollbackError);
+    }
     settingsSaving = false;
     setSettingsBusy(false);
   }
 }
 
-function goWeek(n) {
-  viewWeek = Math.min(Math.max(n, 1), data.settings.weekCount);
-  data.viewWeek = viewWeek; // 记住查看位置：下次启动恢复
-  void saveData().catch(() => {});
-  renderAll();
+async function goWeek(n) {
+  if (scheduleSaving || !(await commitEdit())) return;
+  if (scheduleSaving) return;
+  const targetWeek = Math.min(Math.max(n, 1), data.settings.weekCount);
+  if (targetWeek === viewWeek) return;
+  setScheduleBusy(true);
+  try {
+    const next = cloneStore(data);
+    next.viewWeek = targetWeek; // 保存成功后才切换界面
+    const saved = await saveData(next);
+    data = saved;
+    viewWeek = targetWeek;
+    clearSaveError();
+    renderAll();
+  } catch (error) {
+    setSaveError(error, '切换周次失败');
+  } finally {
+    setScheduleBusy(false);
+  }
 }
 
-function copyPrevWeek() {
-  if (viewWeek <= 1) return;
-  if (!window.confirm('复制上一周将覆盖本周现有课程，是否继续？')) return;
-  if (editingKey !== null) commitEdit();
-  const prev = data.weeks[viewWeek - 1] || {};
-  data.weeks[viewWeek] = JSON.parse(JSON.stringify(prev));
-  void saveData().catch(() => {});
-  renderAll();
+async function copyPrevWeek() {
+  if (scheduleSaving || viewWeek <= 1 || !(await commitEdit())) return;
+  if (scheduleSaving || viewWeek <= 1) return;
+  const confirmed = await requestCopyConfirmation();
+  if (!confirmed) return;
+  setScheduleBusy(true);
+  try {
+    const next = cloneStore(data);
+    const prev = next.weeks[viewWeek - 1] || {};
+    next.weeks[viewWeek] = cloneStore(prev);
+    const saved = await saveData(next);
+    data = saved;
+    clearSaveError();
+    renderAll();
+  } catch (error) {
+    setSaveError(error, '复制上周失败');
+  } finally {
+    setScheduleBusy(false);
+  }
 }
 
 /* ---------- 启动 ---------- */
@@ -544,7 +725,7 @@ async function init() {
     : currentWeek();
   document.documentElement.style.setProperty('--alpha', s.opacity ?? 0.65);
   setInterval(refreshHighlight, 30000); // 30 秒检查一次当前天/节
-  window.__refreshHighlight = refreshHighlight; // 供 E2E 消除时间差
+  if (window.api.testMode) window.__refreshHighlight = refreshHighlight; // 仅供隔离 E2E 消除时间差
   bindEvents();
   renderAll();
 }

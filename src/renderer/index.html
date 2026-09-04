@@ -2,6 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-src 'none'" />
   <title>悬浮课表</title>
   <link rel="stylesheet" href="style.css" />
 </head>
@@ -17,12 +18,25 @@
       <button id="btn-today" class="btn-light" title="回到本周">回本周</button>
       <button id="btn-settings" class="btn-icon" title="设置">⚙</button>
     </header>
-    <div id="hint" hidden></div>
+    <div id="hint" hidden>
+      请设置开学日期：
+      <button id="btn-set-semester" type="button">设置开学日期</button>
+    </div>
     <div id="save-status" role="status" aria-live="polite" hidden></div>
     <main id="scroll">
       <div class="head-row" id="head-row"></div>
       <div id="grid-body"></div>
     </main>
+    <div id="copy-confirm-overlay" hidden>
+      <div id="copy-confirm-panel" role="dialog" aria-modal="true" aria-labelledby="copy-confirm-title" aria-describedby="copy-confirm-message">
+        <h2 id="copy-confirm-title">复制上一周</h2>
+        <p id="copy-confirm-message">这会覆盖本周现有课程，确定继续吗？</p>
+        <div class="copy-confirm-actions">
+          <button id="btn-copy-confirm-cancel" class="btn-light">取消</button>
+          <button id="btn-copy-confirm-ok" class="btn-primary">确认复制</button>
+        </div>
+      </div>
+    </div>
     <div id="settings-overlay" hidden>
       <div id="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title" tabindex="-1">
         <div id="settings-head">
@@ -37,6 +51,7 @@
           <div class="settings-row settings-col">
             <label>节次时间</label>
             <div id="set-times"></div>
+            <div id="time-error" class="settings-field-error" role="alert" hidden></div>
             <button id="btn-add-period" class="btn-light">＋ 添加一节</button>
           </div>
           <div class="settings-row">
@@ -55,8 +70,10 @@
           <div class="settings-row">
             <label for="set-autostart">开机自启</label>
             <input id="set-autostart" type="checkbox" />
+            <span id="autostart-error" class="settings-field-error" role="alert" hidden></span>
           </div>
         </div>
+        <div id="settings-error" role="alert" hidden></div>
         <div class="settings-actions">
           <button id="btn-quit" class="btn-light btn-quit" title="退出程序">退出程序</button>
           <span class="spacer"></span>

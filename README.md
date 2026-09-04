@@ -36,6 +36,14 @@ npm start
 ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ node node_modules/electron/install.js
 ```
 
+### 测试
+
+```bash
+npm test
+```
+
+正式回归使用系统临时目录隔离数据，带超时控制；任一断言失败或超时均以非零退出码结束，不会覆盖个人课表。源码中的 `SCHEDULE_*` 测试钩子仅在 `SCHEDULE_TEST_MODE=1` 时启用；真实开机自启探测另行保护并恢复原状态。
+
 ## 打包
 
 ```bash
@@ -77,12 +85,12 @@ Electron 44 + 原生 HTML/CSS/JS（零框架、零打包器）+ koffi（调用 W
 
 ## 开发方式：Vibe Coding
 
-本项目**全程由 AI 编码代理（Claude Code）通过 vibe coding 方式开发**：需求逐项确认 → 建立标准文档 → 分五个阶段实现（每阶段结束自动化 E2E 验收 + 人工验收，验收通过才进入下一阶段）→ 打包交付。开发过程完整留痕：
+本项目**全程由 AI 编码代理通过 vibe coding 方式开发**：需求逐项确认 → 建立标准文档 → 分五个阶段实现（每阶段结束自动化 E2E 验收 + 人工验收，验收通过才进入下一阶段）→ 打包交付。开发过程完整留痕：
 
 - `docs\01-需求文档.md` ~ `04-执行步骤.md`——需求、技术方案、设计规范、分阶段计划与验收清单
 - `开发日志\`——每个阶段的完成事项、验证结果、待办事项（含各类环境坑的记录）
 - `AGENTS.md`——代理开发的工作指引（文档索引、工作流程、代码规约）
-- 源码内置开发自检钩子（`SCHEDULE_SHOT` / `SCHEDULE_E2E` 环境变量），改动后可一键全量回归
+- 源码内置开发自检钩子（`SCHEDULE_SHOT` / `SCHEDULE_E2E` 等 `SCHEDULE_*` 环境变量），仅在 `SCHEDULE_TEST_MODE=1` 时启用；正式回归入口为 `npm test`
 
 ## 已知说明
 

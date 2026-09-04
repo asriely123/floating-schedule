@@ -5,6 +5,8 @@ schedule.bak
 # 可再生构建产物与依赖（仅提交可直接使用的便携版 EXE）
 dist/*
 !dist/FloatingSchedule-0.1.0-portable.exe
+dist-stage*/
+dist-copy-*/
 node_modules/
 
 # 开发期截图与临时文件

@@ -51,8 +51,13 @@ body {
   line-height: 1;
   cursor: pointer;
 }
-.btn-icon:hover {
+.btn-icon:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.9);
+  color: #2E5FA3;
+  border-color: #4A90D9;
+}
+.btn-icon:active:not(:disabled) {
+  background: rgba(74, 144, 217, 0.2);
   color: #2E5FA3;
   border-color: #4A90D9;
 }
@@ -137,9 +142,11 @@ body {
   word-break: break-all;
   white-space: pre-wrap;
   -webkit-app-region: no-drag; /* 格子可点（编辑），必须排除出拖拽区 */
+  cursor: pointer;
 }
 
 .cell:hover { background: rgba(255, 255, 255, 0.9); }
+.cell:active { background: rgba(74, 144, 217, 0.2); border-color: #4A90D9; }
 
 .cell.time {
   flex-direction: column;
@@ -149,6 +156,7 @@ body {
   color: #5B7A99;
   font-size: 12px;
   font-weight: 700;
+  cursor: default;
 }
 
 .cell.time span { font-weight: 400; }
@@ -198,14 +206,19 @@ body {
   cursor: pointer;
   white-space: nowrap;
 }
-.btn-light:hover {
+.btn-light:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.9);
+  color: #2E5FA3;
+  border-color: #4A90D9;
+}
+.btn-light:active:not(:disabled) {
+  background: rgba(74, 144, 217, 0.2);
   color: #2E5FA3;
   border-color: #4A90D9;
 }
 .btn-light:disabled {
   opacity: 0.35;
-  pointer-events: none;
+  cursor: not-allowed;
 }
 .btn-arrow { width: 26px; padding: 0; }
 
@@ -218,12 +231,46 @@ body {
   padding: 4px 0 6px;
 }
 
+#hint button {
+  -webkit-app-region: no-drag;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: #4A90D9;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+#hint button:hover {
+  color: #2E5FA3;
+}
+#hint button:active {
+  color: #3d7dc4;
+}
+#hint button:focus-visible {
+  outline: 2px solid #4A90D9;
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
 /* ---------- 格子内联编辑 ---------- */
 
 .cell.editing {
   border-color: #4A90D9;
   border-width: 1.5px;
   background: rgba(255, 255, 255, 0.9);
+  cursor: text;
+}
+
+.cell.saving {
+  cursor: progress;
+  opacity: 0.7;
+}
+
+#app.schedule-saving .cell:not(.time) {
+  cursor: not-allowed;
+  opacity: 0.65;
 }
 
 .cell-editor {
@@ -247,6 +294,71 @@ body {
   color: #a54444;
   font-size: 12px;
   text-align: center;
+}
+
+/* ---------- 复制上一周确认层 ---------- */
+
+#copy-confirm-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(46, 71, 93, 0.28);
+  border-radius: 12px;
+  -webkit-app-region: no-drag;
+}
+
+#copy-confirm-overlay[hidden] { display: none; }
+
+#copy-confirm-panel {
+  width: min(100%, 360px);
+  padding: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 6px 24px rgba(31, 55, 86, 0.18);
+}
+
+#copy-confirm-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+#copy-confirm-message {
+  margin-top: 8px;
+  color: #5B7A99;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.copy-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+/* 设置面板内的就近错误提示 */
+#settings-error,
+.settings-field-error {
+  margin: 10px 14px 0;
+  padding: 6px 8px;
+  border: 1px solid rgba(165, 68, 68, 0.28);
+  border-radius: 6px;
+  background: rgba(255, 235, 235, 0.72);
+  color: #a54444;
+  font-size: 12px;
+  line-height: 1.4;
+}
+#settings-error[hidden],
+.settings-field-error[hidden] { display: none; }
+
+.settings-field-error {
+  margin: 2px 0 0;
+  flex-basis: 100%;
 }
 
 /* ---------- 设置浮层 ---------- */
@@ -306,6 +418,12 @@ body {
 .settings-row > input[type="range"] { flex: 1; accent-color: #4A90D9; }
 .settings-row > input[type="checkbox"] { width: 16px; height: 16px; accent-color: #4A90D9; }
 
+/* 设置输入在键盘聚焦时保留清晰的强调色焦点环。 */
+#settings-panel input:focus-visible {
+  outline: 2px solid #4A90D9;
+  outline-offset: 2px;
+}
+
 .settings-col { flex-direction: column; align-items: stretch; }
 #set-times { display: flex; flex-direction: column; gap: 6px; }
 .time-row {
@@ -337,7 +455,11 @@ body {
   font-size: 12px;
   cursor: pointer;
 }
-.time-row-del:hover { background: rgba(74, 144, 217, 0.15); color: #2E5FA3; }
+.time-row-del:hover:not(:disabled) { background: rgba(74, 144, 217, 0.15); color: #2E5FA3; }
+.time-row-del:active:not(:disabled) {
+  background: rgba(74, 144, 217, 0.25);
+  color: #2E5FA3;
+}
 #btn-add-period { align-self: flex-start; }
 
 .settings-actions {
@@ -359,6 +481,61 @@ body {
   font-size: 13px;
   cursor: pointer;
 }
-.btn-primary:hover { background: #3d7dc4; }
+.btn-primary:hover:not(:disabled) { background: #3d7dc4; }
+.btn-primary:active:not(:disabled) { background: #326cae; }
 .btn-quit { color: #b45f5f; }
-.btn-quit:hover { border-color: #d09a9a; background: rgba(255, 255, 255, 0.9); color: #a54444; }
+.btn-quit:hover:not(:disabled) { border-color: #d09a9a; background: rgba(255, 255, 255, 0.9); color: #a54444; }
+
+/* 禁用控件仍保留原生事件语义，仅通过状态提示不可操作 */
+button:disabled,
+input:disabled,
+select:disabled,
+textarea:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ---------- 460px 窄屏 ---------- */
+
+@media (max-width: 520px) {
+  /* 460px 最小窗口的内容宽度约为 418px；标题行与操作行明确分开。 */
+  #app-header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto auto auto;
+    grid-template-rows: auto auto;
+    gap: 6px 8px;
+    align-items: center;
+    padding-bottom: 8px;
+  }
+
+  #title,
+  #week-label {
+    white-space: nowrap;
+  }
+
+  #title { grid-column: 1; grid-row: 1; }
+  #week-label { grid-column: 2; grid-row: 1; }
+  #app-header .spacer { display: none; }
+
+  #btn-copy { grid-column: 1; grid-row: 2; justify-self: start; }
+  #btn-prev { grid-column: 2; grid-row: 2; }
+  #btn-next { grid-column: 3; grid-row: 2; }
+  #btn-today { grid-column: 4; grid-row: 2; }
+  #btn-settings { grid-column: 5; grid-row: 2; }
+
+  /* 72 + 5×64 + 5×4 = 412px，窄于此时只由主网格容器横向滚动。 */
+  #scroll {
+    min-width: 0;
+    overflow-x: auto;
+  }
+
+  #head-row,
+  .cell-row {
+    min-width: 412px;
+    grid-template-columns: 72px repeat(5, minmax(64px, 1fr));
+    gap: 4px;
+  }
+
+  .cell-row { margin-top: 4px; }
+  #head-row { padding-bottom: 4px; }
+}
