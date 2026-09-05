@@ -73,14 +73,18 @@ body {
 /* ---------- 网格 ---------- */
 
 #scroll {
+  --day-count: 5;
+  --grid-min-width: 0px;
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
+  overflow: auto;
   display: flex;
   flex-direction: column;
 }
 
-#scroll::-webkit-scrollbar { width: 6px; }
+#scroll.weekend-visible { --grid-min-width: 566px; }
+
+#scroll::-webkit-scrollbar { width: 6px; height: 6px; }
 #scroll::-webkit-scrollbar-thumb { background: rgba(61, 90, 128, 0.25); border-radius: 3px; }
 
 /* 行高随窗口高度均分：短课表占满高度，超高自动滚动 */
@@ -95,7 +99,8 @@ body {
   top: 0;
   z-index: 2;
   display: grid;
-  grid-template-columns: 76px repeat(5, 1fr);
+  min-width: var(--grid-min-width);
+  grid-template-columns: 76px repeat(var(--day-count), minmax(64px, 1fr));
   gap: 6px;
   padding-bottom: 6px;
   background: rgba(214, 232, 248, 0.92);
@@ -123,7 +128,8 @@ body {
   flex: 1 1 auto;
   min-height: 44px;
   display: grid;
-  grid-template-columns: 76px repeat(5, 1fr);
+  min-width: var(--grid-min-width);
+  grid-template-columns: 76px repeat(var(--day-count), minmax(64px, 1fr));
   gap: 6px;
   margin-top: 6px;
 }
@@ -523,16 +529,19 @@ textarea:disabled {
   #btn-today { grid-column: 4; grid-row: 2; }
   #btn-settings { grid-column: 5; grid-row: 2; }
 
-  /* 72 + 5×64 + 5×4 = 412px，窄于此时只由主网格容器横向滚动。 */
+  /* 五列 412px、七列 548px；窄于对应宽度时只由主网格容器横向滚动。 */
   #scroll {
+    --grid-min-width: 412px;
     min-width: 0;
     overflow-x: auto;
   }
 
+  #scroll.weekend-visible { --grid-min-width: 548px; }
+
   #head-row,
   .cell-row {
-    min-width: 412px;
-    grid-template-columns: 72px repeat(5, minmax(64px, 1fr));
+    min-width: var(--grid-min-width);
+    grid-template-columns: 72px repeat(var(--day-count), minmax(64px, 1fr));
     gap: 4px;
   }
 

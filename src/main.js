@@ -44,6 +44,7 @@ const DEFAULT_DATA = {
       { start: '15:50', end: '16:35' },
     ],
     opacity: 0.65,
+    showWeekend: false,
     autoStart: false,
   },
   window: null, // { x, y, width, height }
@@ -154,6 +155,9 @@ function normalizeStore(raw) {
       periodsPerDay,
       periodTimes,
       opacity: Math.min(Math.max(Number(sourceSettings.opacity) || def.settings.opacity, 0.5), 1),
+      showWeekend: typeof sourceSettings.showWeekend === 'boolean'
+        ? sourceSettings.showWeekend
+        : def.settings.showWeekend,
       autoStart: typeof sourceSettings.autoStart === 'boolean' ? sourceSettings.autoStart : def.settings.autoStart,
     },
     window: null,
@@ -178,7 +182,9 @@ function normalizeStore(raw) {
     const sourceWeek = isPlainObject(sourceWeeks[week]) ? sourceWeeks[week] : null;
     if (!sourceWeek) continue;
     const days = {};
-    for (let day = 0; day < 5; day++) {
+    for (let day = 0; day < 7; day++) {
+      // 工作日沿用既有完整骨架；周末仅在源数据存在时保留，避免旧课表无意义写入空数组。
+      if (day >= 5 && !Array.isArray(sourceWeek[day])) continue;
       const sourceDay = Array.isArray(sourceWeek[day]) ? sourceWeek[day] : [];
       days[day] = Array.from({ length: periodsPerDay }, (_, period) => {
         const value = sourceDay[period];
@@ -264,16 +270,38 @@ function runStoreSelfCheck() {
       },
       window: { x: 'bad', y: 12 },
       viewWeek: 99,
-      weeks: { 1: { 0: ['数据结构', 123] } },
+      weeks: {
+        1: {
+          0: ['数据结构', 123],
+          5: ['周六课程', 456],
+          6: ['周日课程'],
+        },
+      },
+    });
+    const weekendEnabled = normalizeStore({
+      ...saved,
+      settings: { ...saved.settings, showWeekend: true },
+    });
+    const withoutWeekendDays = normalizeStore({
+      ...saved,
+      weeks: { 1: { 0: ['仅工作日'] } },
     });
     const normalized = saved.settings.periodsPerDay === 14 &&
       saved.settings.weekCount === 1 &&
       saved.settings.semesterStart === '2026-09-07' &&
       saved.settings.opacity === 1 &&
+      saved.settings.showWeekend === false &&
       saved.settings.periodTimes[0].start === '' &&
       saved.settings.periodTimes[0].end === '08:45' &&
       saved.window === null &&
-      saved.weeks[1][0][0] === '数据结构' && saved.weeks[1][0][1] === '';
+      saved.weeks[1][0][0] === '数据结构' && saved.weeks[1][0][1] === '' &&
+      saved.weeks[1][5][0] === '周六课程' && saved.weeks[1][5][1] === '' &&
+      saved.weeks[1][5].length === 14 &&
+      saved.weeks[1][6][0] === '周日课程' && saved.weeks[1][6].length === 14 &&
+      weekendEnabled.settings.showWeekend === true &&
+      weekendEnabled.weeks[1][5][0] === '周六课程' &&
+      !Object.hasOwn(withoutWeekendDays.weeks[1], 5) &&
+      !Object.hasOwn(withoutWeekendDays.weeks[1], 6);
 
     // 第二次保存生成备份，再故意损坏主文件，验证可从备份读取。
     saveStore(saved);
@@ -283,7 +311,10 @@ function runStoreSelfCheck() {
     for (const invalidMain of ['{损坏的数据', '{}', '{"settings":{}}']) {
       fs.writeFileSync(dataFile(), invalidMain, 'utf8');
       const recovered = loadStore();
-      backupRecovered &&= recovered.weeks[1]?.[0]?.[0] === '数据结构';
+      backupRecovered &&= recovered.weeks[1]?.[0]?.[0] === '数据结构' &&
+        recovered.settings.showWeekend === false &&
+        recovered.weeks[1]?.[5]?.[0] === '周六课程' &&
+        recovered.weeks[1]?.[6]?.[0] === '周日课程';
       saveStore(recovered);
       backupPreserved &&= fs.readFileSync(backupFile(), 'utf8') === backupBeforeRepair;
     }
@@ -299,6 +330,7 @@ function runStoreSelfCheck() {
     if (!normalized || !backupRecovered || !backupPreserved || !windowPreserved) {
       throw new Error('数据归一化、备份恢复或有效备份保留断言失败');
     }
+    logMain('[STORE-E2E] PASS weekend-data-compatibility');
     logMain('[STORE-E2E] PASS normalize-and-backup-recovery');
   } finally {
     resolvedDataDir = originalDataDir;
@@ -888,6 +920,13 @@ async function runPhase3E2E() {
   const eq = (a, b) => a === b;
   try {
     await waitFor(`!document.getElementById('btn-settings').disabled`);
+    const initialGrid = await js(`(() => ({
+      heads: document.querySelectorAll('.day-head').length,
+      rows: document.querySelectorAll('.cell-row').length,
+      cells: document.querySelectorAll('.cell:not(.time)').length
+    }))()`);
+    log('weekend-default-hidden', initialGrid.heads === 5 && initialGrid.cells === initialGrid.rows * 5,
+      JSON.stringify(initialGrid));
     log('no-highlight-without-semester', await js(`
       document.querySelectorAll('.cell.today, .cell.now, .day-head.today').length === 0
     `));
@@ -899,6 +938,7 @@ async function runPhase3E2E() {
       await wait(50);
     }
     log('autostart-ready', !(await js(`document.getElementById('btn-settings-save').disabled`)));
+    log('weekend-setting-default-off', !(await js(`document.getElementById('set-show-weekend').checked`)));
 
     // 4/14 节边界不留下可点击但无结果的按钮
     await js(`(() => {
@@ -957,8 +997,13 @@ async function runPhase3E2E() {
       const d = document.getElementById('set-semester-start'); d.value = '2026-09-07';
       const o = document.getElementById('set-opacity'); o.value = '0.8';
       o.dispatchEvent(new Event('input', { bubbles: true }));
+      const weekend = document.getElementById('set-show-weekend');
+      weekend.checked = true;
+      weekend.dispatchEvent(new Event('change', { bubbles: true }));
       return true;
     })()`);
+    log('weekend-draft-does-not-preview',
+      eq(await js(`document.querySelectorAll('.day-head').length`), 5));
 
     const savingLabel = await js(`(() => {
       document.getElementById('btn-settings-save').click();
@@ -968,6 +1013,18 @@ async function runPhase3E2E() {
     await waitFor(`document.getElementById('settings-overlay').hidden`);
 
     log('grid-rows-9', eq(await js(`document.querySelectorAll('.cell-row').length`), 9));
+    const enabledGrid = await js(`(() => ({
+      heads: [...document.querySelectorAll('.day-head')].map((head) => head.textContent),
+      cells: document.querySelectorAll('.cell:not(.time)').length,
+      rows: document.querySelectorAll('.cell-row').length,
+      headTracks: getComputedStyle(document.getElementById('head-row')).gridTemplateColumns.split(' ').filter(Boolean).length,
+      rowTracks: getComputedStyle(document.querySelector('.cell-row')).gridTemplateColumns.split(' ').filter(Boolean).length
+    }))()`);
+    log('weekend-enabled-after-save',
+      JSON.stringify(enabledGrid.heads) === JSON.stringify(['周一', '周二', '周三', '周四', '周五', '周六', '周日']) &&
+      enabledGrid.cells === enabledGrid.rows * 7 && enabledGrid.headTracks === 8 && enabledGrid.rowTracks === 8 &&
+      loadStore().settings.showWeekend === true,
+      JSON.stringify(enabledGrid));
     log('time-updated', eq(await js(`document.querySelector('.cell.time span').textContent`), '08:10'));
     log('hint-hidden', await js(`document.getElementById('hint').hidden`));
     const appBg = await js(`getComputedStyle(document.getElementById('app')).backgroundColor`);
@@ -978,8 +1035,115 @@ async function runPhase3E2E() {
     await waitFor(`!document.getElementById('settings-overlay').hidden`);
     log('reopen-persisted',
       eq(await js(`document.getElementById('set-periods').value`), '9') &&
-      eq(await js(`document.getElementById('set-semester-start').value`), '2026-09-07'));
+      eq(await js(`document.getElementById('set-semester-start').value`), '2026-09-07') &&
+      await js(`document.getElementById('set-show-weekend').checked`));
     await js(`document.getElementById('btn-settings-cancel').click()`);
+
+    // 七天模式下，当前周的任意星期（包含周末）都使用同一高亮范围。
+    const expectedCurrentWeek = await js(`currentWeek()`);
+    await js(`document.getElementById('btn-today').click()`);
+    await waitFor(`
+      document.getElementById('week-label').textContent.includes('第 ${expectedCurrentWeek} 周') &&
+      !document.getElementById('btn-settings').disabled
+    `);
+    const sevenDayHighlight = await js(`(() => {
+      window.__refreshHighlight();
+      const dayIndex = (new Date().getDay() + 6) % 7;
+      const heads = [...document.querySelectorAll('.day-head.today')].map((head) => +head.dataset.dayIndex);
+      const cells = [...document.querySelectorAll('.cell.today')].map((cell) => +cell.dataset.day);
+      const rows = document.querySelectorAll('.cell-row').length;
+      return { dayIndex, heads, cells, rows };
+    })()`);
+    log('seven-day-highlight-range',
+      sevenDayHighlight.heads.length === 1 && sevenDayHighlight.heads[0] === sevenDayHighlight.dayIndex &&
+      sevenDayHighlight.cells.length === sevenDayHighlight.rows &&
+      sevenDayHighlight.cells.every((day) => day === sevenDayHighlight.dayIndex),
+      JSON.stringify(sevenDayHighlight));
+
+    // 周末格沿用原编辑链路，多行内容落盘；下一周复制时包含周末。
+    const weekendCourse = '周六课程\n实验';
+    await js(`document.querySelector('.cell[data-day="5"][data-period="0"]')
+      .dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+    await waitFor(`document.activeElement?.classList.contains('cell-editor')`);
+    await js(`(() => {
+      const editor = document.querySelector('.cell-editor');
+      editor.value = ${JSON.stringify(weekendCourse)};
+      editor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    })()`);
+    await waitFor(`document.querySelector('.cell[data-day="5"][data-period="0"]')?.textContent === ${JSON.stringify(weekendCourse)}`);
+    log('weekend-cell-edit-saved',
+      eq(await js(`document.querySelector('.cell[data-day="5"][data-period="0"]').textContent`), weekendCourse));
+
+    const sourceWeek = +(await js(`document.getElementById('week-label').textContent.match(/第 (\\d+) 周/)[1]`));
+    await js(`document.getElementById('btn-next').click()`);
+    await waitFor(`document.getElementById('week-label').textContent.includes('第 ${sourceWeek + 1} 周')`);
+    await js(`document.getElementById('btn-copy').click()`);
+    await waitFor(`!document.getElementById('copy-confirm-overlay').hidden`);
+    await js(`document.getElementById('btn-copy-confirm-ok').click()`);
+    await waitFor(`document.querySelector('.cell[data-day="5"][data-period="0"]')?.textContent === ${JSON.stringify(weekendCourse)}`);
+    log('copy-prev-week-includes-weekend',
+      eq(await js(`document.querySelector('.cell[data-day="5"][data-period="0"]').textContent`), weekendCourse));
+
+    // 隐藏仅改变可见列；重新开启后，同一周的周末课程仍在。
+    await js(`document.getElementById('btn-settings').click()`);
+    await waitFor(`!document.getElementById('settings-overlay').hidden && !document.getElementById('btn-settings-save').disabled`);
+    await js(`(() => {
+      const weekend = document.getElementById('set-show-weekend');
+      weekend.checked = false;
+      weekend.dispatchEvent(new Event('change', { bubbles: true }));
+      document.getElementById('btn-settings-save').click();
+    })()`);
+    await waitFor(`document.getElementById('settings-overlay').hidden && document.querySelectorAll('.day-head').length === 5`);
+    const copiedWeek = sourceWeek + 1;
+    const hiddenStore = loadStore();
+    log('weekend-hidden-data-retained', hiddenStore.settings.showWeekend === false &&
+      hiddenStore.weeks[copiedWeek]?.[5]?.[0] === weekendCourse &&
+      await js(`!document.querySelector('.cell[data-day="5"]')`));
+
+    await js(`document.getElementById('btn-settings').click()`);
+    await waitFor(`!document.getElementById('settings-overlay').hidden && !document.getElementById('btn-settings-save').disabled`);
+    await js(`(() => {
+      const weekend = document.getElementById('set-show-weekend');
+      weekend.checked = true;
+      weekend.dispatchEvent(new Event('change', { bubbles: true }));
+      document.getElementById('btn-settings-save').click();
+    })()`);
+    await waitFor(`document.getElementById('settings-overlay').hidden && document.querySelectorAll('.day-head').length === 7`);
+    log('weekend-reshow-restores-course',
+      eq(await js(`document.querySelector('.cell[data-day="5"][data-period="0"]').textContent`), weekendCourse));
+
+    await js(`(() => {
+      const cell = document.querySelector('.cell[data-day="5"][data-period="0"]');
+      cell.focus();
+      cell.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    })()`);
+    await waitFor(`document.activeElement?.classList.contains('cell-editor')`);
+    const shiftEnterAllowed = await js(`(() => {
+      const editor = document.querySelector('.cell-editor');
+      const event = new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, bubbles: true, cancelable: true });
+      editor.dispatchEvent(event);
+      editor.value = '这段内容应被取消';
+      editor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      return !event.defaultPrevented;
+    })()`);
+    await waitFor(`!document.querySelector('.cell-editor')`);
+    log('weekend-keyboard-edit-cancel', shiftEnterAllowed &&
+      eq(await js(`document.querySelector('.cell[data-day="5"][data-period="0"]').textContent`), weekendCourse));
+
+    const blurCourse = weekendCourse + '\n失焦保存';
+    await js(`(() => {
+      const cell = document.querySelector('.cell[data-day="5"][data-period="0"]');
+      cell.focus();
+      cell.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
+    })()`);
+    await waitFor(`document.activeElement?.classList.contains('cell-editor')`);
+    await js(`(() => {
+      document.querySelector('.cell-editor').value = ${JSON.stringify(blurCourse)};
+      document.getElementById('btn-next').focus();
+    })()`);
+    await waitFor(`document.querySelector('.cell[data-day="5"][data-period="0"]')?.textContent === ${JSON.stringify(blurCourse)}`);
+    log('weekend-blur-save',
+      eq(await js(`document.querySelector('.cell[data-day="5"][data-period="0"]').textContent`), blurCourse));
   } catch (e) {
     errorMain('[E2E3] failed:', e);
     e2eFailures.push(`E2E3/exception:${e.message}`);
@@ -997,7 +1161,8 @@ async function runPhase4E2E() {
       const d = new Date();
       const dayIndex = (d.getDay() + 6) % 7;
       const viewingCurrentWeek = document.getElementById('week-label').textContent.includes('第 ' + currentWeek() + ' 周');
-      const today = viewingCurrentWeek && dayIndex <= 4 ? dayIndex : -1;
+      const visibleDays = document.querySelectorAll('.day-head').length;
+      const today = viewingCurrentWeek && dayIndex < visibleDays ? dayIndex : -1;
       const minutes = d.getHours() * 60 + d.getMinutes();
       const toMin = (s) => { const [h, m] = String(s).split(':').map(Number); return h * 60 + m; };
       let nowP = -1;
@@ -1095,20 +1260,32 @@ async function runFailureE2E() {
     await waitFor(`!document.getElementById('settings-overlay').hidden && !document.getElementById('btn-settings-save').disabled`);
     const originalWeeks = +(await js(`document.getElementById('set-weeks').value`));
     const draftWeeks = originalWeeks > 1 ? originalWeeks - 1 : originalWeeks + 1;
+    const originalShowWeekend = await js(`document.getElementById('set-show-weekend').checked`);
+    const draftShowWeekend = !originalShowWeekend;
+    const committedDayCount = await js(`document.querySelectorAll('.day-head').length`);
     injectedSaveFailures = 1;
     await js(`(() => {
       document.getElementById('set-weeks').value = ${draftWeeks};
+      const weekend = document.getElementById('set-show-weekend');
+      weekend.checked = ${draftShowWeekend};
+      weekend.dispatchEvent(new Event('change', { bubbles: true }));
       document.getElementById('btn-settings-save').click();
     })()`);
     await waitFor(`!document.getElementById('settings-error').hidden`);
     log('settings-keeps-draft', await js(`
       !document.getElementById('settings-overlay').hidden &&
       +document.getElementById('set-weeks').value === ${draftWeeks} &&
+      document.getElementById('set-show-weekend').checked === ${draftShowWeekend} &&
       document.getElementById('settings-error').textContent.includes('设置保存失败')
     `));
+    log('settings-weekend-keeps-committed-grid',
+      (await js(`document.querySelectorAll('.day-head').length`)) === committedDayCount);
     await js(`document.getElementById('btn-settings-save').click()`);
     await waitFor(`document.getElementById('settings-overlay').hidden`);
-    log('settings-retry-succeeds', await js(`document.getElementById('week-label').textContent.includes('共 ${draftWeeks} 周')`));
+    log('settings-retry-succeeds', await js(`
+      document.getElementById('week-label').textContent.includes('共 ${draftWeeks} 周') &&
+      document.querySelectorAll('.day-head').length === ${draftShowWeekend ? 7 : 5}
+    `));
   } catch (error) {
     errorMain('[E2E-FAIL] failed:', error);
     e2eFailures.push(`E2E-FAIL/exception:${error.message}`);
@@ -1123,35 +1300,63 @@ async function runLayoutE2E() {
   const js = (code) => win.webContents.executeJavaScript(code);
   const log = (name, ok, detail) => recordE2E('E2E-LAYOUT', name, ok, detail);
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const waitFor = async (code, timeout = 2500) => {
+    const started = Date.now();
+    while (Date.now() - started < timeout) {
+      if (await js(code)) return true;
+      await wait(50);
+    }
+    throw new Error(`等待条件超时：${code}`);
+  };
+  const readGrid = () => js(`(() => {
+    const header = document.getElementById('app-header');
+    const scroll = document.getElementById('scroll');
+    const head = document.getElementById('head-row');
+    const row = document.querySelector('.cell-row');
+    const dayWidths = [...row.querySelectorAll('.cell:not(.time)')]
+      .map((cell) => cell.getBoundingClientRect().width);
+    const headerRect = header.getBoundingClientRect();
+    const headRect = head.getBoundingClientRect();
+    const rowRect = row.getBoundingClientRect();
+    const controlsInside = [...header.querySelectorAll('button')].every((button) => {
+      const rect = button.getBoundingClientRect();
+      return rect.left >= headerRect.left - 1 && rect.right <= headerRect.right + 1 &&
+        rect.top >= headerRect.top - 1 && rect.bottom <= headerRect.bottom + 1;
+    });
+    return {
+      viewport: [innerWidth, innerHeight],
+      documentFits: document.documentElement.scrollWidth <= innerWidth + 1,
+      headerFits: header.scrollWidth <= header.clientWidth + 1 && controlsInside,
+      headCount: document.querySelectorAll('.day-head').length,
+      rowCount: document.querySelectorAll('.cell-row').length,
+      cellCount: document.querySelectorAll('.cell:not(.time)').length,
+      headWidth: headRect.width,
+      rowWidth: rowRect.width,
+      headLeft: headRect.left,
+      rowLeft: rowRect.left,
+      minDayWidth: Math.min(...dayWidths),
+      headTracks: getComputedStyle(head).gridTemplateColumns,
+      rowTracks: getComputedStyle(row).gridTemplateColumns,
+      scrollClientWidth: scroll.clientWidth,
+      scrollWidth: scroll.scrollWidth,
+      scrollLeft: scroll.scrollLeft,
+      scrollMax: scroll.scrollWidth - scroll.clientWidth,
+      scrollOwnsOverflow: getComputedStyle(scroll).overflowX === 'auto',
+    };
+  })()`);
   try {
-    const grid = await js(`(() => {
-      const header = document.getElementById('app-header');
-      const scroll = document.getElementById('scroll');
-      const row = document.querySelector('.cell-row');
-      const dayWidths = [...row.querySelectorAll('.cell:not(.time)')].map((cell) => cell.getBoundingClientRect().width);
-      const headerRect = header.getBoundingClientRect();
-      const controlsInside = [...header.querySelectorAll('button')].every((button) => {
-        const rect = button.getBoundingClientRect();
-        return rect.left >= headerRect.left - 1 && rect.right <= headerRect.right + 1 &&
-          rect.top >= headerRect.top - 1 && rect.bottom <= headerRect.bottom + 1;
-      });
-      return {
-        viewport: [innerWidth, innerHeight],
-        documentFits: document.documentElement.scrollWidth <= innerWidth + 1,
-        headerFits: header.scrollWidth <= header.clientWidth + 1 && controlsInside,
-        rowWidth: row.getBoundingClientRect().width,
-        minDayWidth: Math.min(...dayWidths),
-        scrollOwnsOverflow: getComputedStyle(scroll).overflowX === 'auto',
-      };
-    })()`);
+    const grid = await readGrid();
     // Windows 在部分 DPI 下会把无边框窗口的物理边界向上取整 1px。
     log('minimum-window', grid.viewport[0] >= MIN_W && grid.viewport[0] <= MIN_W + 1 &&
       grid.viewport[1] >= MIN_H && grid.viewport[1] <= MIN_H + 1, JSON.stringify(grid.viewport));
     log('header-contained', grid.headerFits && grid.documentFits, JSON.stringify(grid));
-    log('grid-readable', grid.rowWidth >= 411.5 && grid.minDayWidth >= 63.5 && grid.scrollOwnsOverflow, JSON.stringify(grid));
+    log('five-day-minimum-grid', grid.headCount === 5 && grid.cellCount === grid.rowCount * 5 &&
+      grid.rowWidth >= 411.5 && grid.minDayWidth >= 63.5 && grid.scrollOwnsOverflow,
+    JSON.stringify(grid));
 
     await js(`document.getElementById('btn-settings').click()`);
     await wait(150);
+    const originalPeriods = await js(`+document.getElementById('set-periods').value`);
     await js(`(() => {
       const input = document.getElementById('set-periods');
       input.value = 14;
@@ -1184,7 +1389,44 @@ async function runLayoutE2E() {
       [...document.querySelectorAll('.time-row-del')].every((button) => button.hidden && !isVisibleForFocus(button))
     `);
     log('hidden-delete-skipped', deletesSkipped);
-    await js(`document.getElementById('btn-settings-cancel').click()`);
+
+    await js(`(() => {
+      const periods = document.getElementById('set-periods');
+      periods.value = ${originalPeriods};
+      periods.dispatchEvent(new Event('change', { bubbles: true }));
+      const weekend = document.getElementById('set-show-weekend');
+      weekend.checked = true;
+      weekend.dispatchEvent(new Event('change', { bubbles: true }));
+      document.getElementById('btn-settings-save').click();
+    })()`);
+    await waitFor(`document.getElementById('settings-overlay').hidden && document.querySelectorAll('.day-head').length === 7`);
+    await wait(100);
+
+    const seven = await readGrid();
+    log('seven-day-minimum-grid', seven.headCount === 7 && seven.cellCount === seven.rowCount * 7 &&
+      seven.rowWidth >= 547.5 && seven.minDayWidth >= 63.5,
+    JSON.stringify(seven));
+    log('seven-day-scroll-contained', seven.documentFits && seven.scrollOwnsOverflow &&
+      seven.scrollMax >= 100 && seven.scrollClientWidth < seven.scrollWidth,
+    JSON.stringify(seven));
+
+    await js(`(() => {
+      const scroll = document.getElementById('scroll');
+      scroll.scrollLeft = scroll.scrollWidth;
+    })()`);
+    await wait(50);
+    const scrolledSeven = await readGrid();
+    log('seven-day-header-row-aligned', scrolledSeven.scrollLeft > 0 &&
+      Math.abs(scrolledSeven.headWidth - scrolledSeven.rowWidth) <= 1 &&
+      Math.abs(scrolledSeven.headLeft - scrolledSeven.rowLeft) <= 1 &&
+      scrolledSeven.headTracks === scrolledSeven.rowTracks,
+    JSON.stringify(scrolledSeven));
+
+    await wait(100);
+    const weekendImage = await win.webContents.capturePage();
+    fs.writeFileSync(path.join(shotDir(), 'dev-screenshot-weekend.png'), weekendImage.toPNG());
+    logMain('[SHOT] weekend minimum viewport saved');
+    await js(`document.getElementById('scroll').scrollLeft = 0`);
   } catch (error) {
     errorMain('[E2E-LAYOUT] failed:', error);
     e2eFailures.push(`E2E-LAYOUT/exception:${error.message}`);

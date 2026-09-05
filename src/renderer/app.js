@@ -1,5 +1,6 @@
 // 悬浮课表 · 渲染层：课表渲染 / 编辑 / 翻页 / 复制上周
-const DAY_NAMES = ['周一', '周二', '周三', '周四', '周五'];
+const DAY_NAMES = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+const WEEKDAY_COUNT = 5;
 
 let data = null;      // schedule.json 业务快照；保存时主进程会忽略其中的 window 字段
 let viewWeek = 1;     // 当前显示周
@@ -60,6 +61,10 @@ function setCellText(store, week, day, period, text) {
   arr[period] = text;
 }
 
+function visibleDayCount(store = data) {
+  return store?.settings?.showWeekend ? DAY_NAMES.length : WEEKDAY_COUNT;
+}
+
 function setSaveError(error, action = '保存失败') {
   const status = $('#save-status');
   status.textContent = `${action}：${chineseErrorMessage(error, '请检查程序目录权限后重试')}`;
@@ -88,7 +93,7 @@ function renderHead() {
   timeHead.className = 'time-head';
   timeHead.textContent = '时间';
   head.appendChild(timeHead);
-  DAY_NAMES.forEach((name, i) => {
+  DAY_NAMES.slice(0, visibleDayCount()).forEach((name, i) => {
     const day = document.createElement('div');
     day.className = 'day-head';
     day.dataset.day = name;
@@ -121,7 +126,7 @@ function renderGrid() {
     }
     row.appendChild(timeCell);
 
-    for (let d = 0; d < 5; d++) {
+    for (let d = 0; d < visibleDayCount(); d++) {
       const text = cellText(viewWeek, d, p);
       const cell = document.createElement('div');
       cell.className = 'cell' + (text ? '' : ' empty');
@@ -161,6 +166,10 @@ function setScheduleBusy(busy) {
 }
 
 function renderAll() {
+  const dayCount = visibleDayCount();
+  const scroll = $('#scroll');
+  scroll.style.setProperty('--day-count', dayCount);
+  scroll.classList.toggle('weekend-visible', dayCount === DAY_NAMES.length);
   renderHead();
   renderHeader();
   renderGrid();
@@ -173,7 +182,7 @@ function refreshHighlight() {
   const d = new Date();
   const dayIndex = (d.getDay() + 6) % 7; // 0=周一 .. 4=周五, 5/6=周末
   const viewingCurrentWeek = !!data.settings.semesterStart && viewWeek === currentWeek();
-  const today = viewingCurrentWeek && dayIndex <= 4 ? dayIndex : -1;
+  const today = viewingCurrentWeek && dayIndex < visibleDayCount() ? dayIndex : -1;
   const minutes = d.getHours() * 60 + d.getMinutes();
 
   // 当前正在上的节次（按 settings 时间表判断；仅今天列生效）
@@ -341,6 +350,9 @@ function bindEvents() {
   $('#btn-settings-save').addEventListener('click', () => saveSettings());
   $('#btn-quit').addEventListener('click', () => window.api.quit());
   $('#btn-add-period').addEventListener('click', () => addTimeRow());
+  $('#set-show-weekend').addEventListener('change', () => {
+    if (draft) draft.showWeekend = $('#set-show-weekend').checked;
+  });
   $('#set-periods').addEventListener('change', () => {
     draft.periodsPerDay = Math.min(Math.max(+$('#set-periods').value || 8, 4), 14);
     $('#set-periods').value = draft.periodsPerDay;
@@ -509,10 +521,12 @@ async function openSettings() {
   draft = {
     periodsPerDay: s.periodsPerDay,
     times: JSON.parse(JSON.stringify(s.periodTimes || [])),
+    showWeekend: !!s.showWeekend,
     initialAutoStart: !!s.autoStart,
   };
   prevAlpha = s.opacity ?? 0.65;
   $('#set-periods').value = draft.periodsPerDay;
+  $('#set-show-weekend').checked = draft.showWeekend;
   $('#set-weeks').value = s.weekCount;
   $('#set-semester-start').value = s.semesterStart || '';
   $('#set-opacity').value = prevAlpha;
@@ -612,6 +626,7 @@ async function saveSettings() {
   s.weekCount = Math.min(Math.max(+$('#set-weeks').value || 20, 1), 30);
   s.semesterStart = $('#set-semester-start').value || '';
   s.opacity = +$('#set-opacity').value;
+  s.showWeekend = !!draft.showWeekend;
   s.autoStart = $('#set-autostart').checked || false;
   // 节次时间与每天课数对齐（不足补空、多余截断）
   s.periodTimes = draft.times.slice(0, s.periodsPerDay);
@@ -623,7 +638,7 @@ async function saveSettings() {
     return;
   }
   for (const w of Object.keys(next.weeks)) {
-    for (let d = 0; d < 5; d++) {
+    for (let d = 0; d < DAY_NAMES.length; d++) {
       const arr = next.weeks[w]?.[d];
       if (!arr) continue;
       next.weeks[w][d] = arr.slice(0, s.periodsPerDay);
@@ -697,6 +712,7 @@ async function copyPrevWeek() {
   if (scheduleSaving || viewWeek <= 1) return;
   const confirmed = await requestCopyConfirmation();
   if (!confirmed) return;
+  const copyButton = $('#btn-copy');
   setScheduleBusy(true);
   try {
     const next = cloneStore(data);
@@ -710,6 +726,7 @@ async function copyPrevWeek() {
     setSaveError(error, '复制上周失败');
   } finally {
     setScheduleBusy(false);
+    if (copyButton.isConnected && !copyButton.disabled) copyButton.focus();
   }
 }
 

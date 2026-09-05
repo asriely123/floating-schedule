@@ -1,4 +1,8 @@
-﻿$ErrorActionPreference = 'Stop'
+﻿param(
+  [string]$AppPath = ''
+)
+
+$ErrorActionPreference = 'Stop'
 
 # npm test 的正式隔离回归入口。脚本只会删除它自己在系统临时目录中创建的目录。
 $projectRoot = Split-Path -Parent $PSScriptRoot
@@ -204,10 +208,24 @@ try {
   Write-Result "隔离目录：$runRoot"
 
   $node = (Get-Command node.exe -ErrorAction Stop).Source
-  $electron = Join-Path $projectRoot 'node_modules\electron\dist\electron.exe'
-  if (-not (Test-Path -LiteralPath $electron -PathType Leaf)) {
-    throw "缺少 Electron 可执行文件：$electron（请先 npm install）"
+  if ($AppPath) {
+    $candidate = if ([System.IO.Path]::IsPathRooted($AppPath)) {
+      $AppPath
+    } else {
+      Join-Path $projectRoot $AppPath
+    }
+    $electron = [System.IO.Path]::GetFullPath($candidate)
+    $electronArguments = @()
+    $runtimeLabel = '便携版'
+  } else {
+    $electron = Join-Path $projectRoot 'node_modules\electron\dist\electron.exe'
+    $electronArguments = @('.')
+    $runtimeLabel = 'Electron'
   }
+  if (-not (Test-Path -LiteralPath $electron -PathType Leaf)) {
+    throw "缺少待测可执行文件：$electron"
+  }
+  Write-Result "待测运行时：$runtimeLabel ($electron)"
 
   foreach ($file in @('src\main.js', 'src\preload.js', 'src\renderer\app.js')) {
     $check = Invoke-ProcessChecked -FilePath $node -Arguments @('--check', (Join-Path $projectRoot $file)) -Environment (Get-CurrentEnvironment) -TimeoutMilliseconds 15000 -Label "node --check $file"
@@ -217,9 +235,12 @@ try {
   $storeLog = Join-Path $runRoot 'store.log'
   [System.IO.File]::WriteAllText($storeLog, '')
   $storeEnv = New-ElectronEnvironment -LogFile $storeLog -Hooks @{ SCHEDULE_STORE_E2E = '1' }
-  $store = Invoke-ProcessChecked -FilePath $electron -Arguments @('.') -Environment $storeEnv -TimeoutMilliseconds 45000 -Label 'Electron 存储 E2E'
-  Assert-ProcessResult -Label 'Electron 存储 E2E' -Result $store
-  Assert-TestLog -Label 'Electron 存储 E2E' -LogFile $storeLog -ExpectedPassPatterns @('\[STORE-E2E\]\s+PASS\s+normalize-and-backup-recovery')
+  $store = Invoke-ProcessChecked -FilePath $electron -Arguments $electronArguments -Environment $storeEnv -TimeoutMilliseconds 45000 -Label "$runtimeLabel 存储 E2E"
+  Assert-ProcessResult -Label "$runtimeLabel 存储 E2E" -Result $store
+  Assert-TestLog -Label "$runtimeLabel 存储 E2E" -LogFile $storeLog -ExpectedPassPatterns @(
+    '\[STORE-E2E\]\s+PASS\s+weekend-data-compatibility',
+    '\[STORE-E2E\]\s+PASS\s+normalize-and-backup-recovery'
+  )
 
   $shotLog = Join-Path $runRoot 'shot-e2e.log'
   [System.IO.File]::WriteAllText($shotLog, '')
@@ -229,20 +250,36 @@ try {
     SCHEDULE_FAILURE_E2E = '1'
     SCHEDULE_TEST_MIN_VIEWPORT = '1'
   }
-  $shot = Invoke-ProcessChecked -FilePath $electron -Arguments @('.') -Environment $shotEnv -TimeoutMilliseconds 120000 -Label 'Electron 截图与全量 E2E'
-  Assert-ProcessResult -Label 'Electron 截图与全量 E2E' -Result $shot
-  Assert-TestLog -Label 'Electron 截图与全量 E2E' -LogFile $shotLog -ExpectedPassPatterns @(
+  $shot = Invoke-ProcessChecked -FilePath $electron -Arguments $electronArguments -Environment $shotEnv -TimeoutMilliseconds 120000 -Label "$runtimeLabel 截图与全量 E2E"
+  Assert-ProcessResult -Label "$runtimeLabel 截图与全量 E2E" -Result $shot
+  Assert-TestLog -Label "$runtimeLabel 截图与全量 E2E" -LogFile $shotLog -ExpectedPassPatterns @(
     '\[E2E\]\s+PASS\s+',
     '\[E2E3\]\s+PASS\s+',
+    '\[E2E3\]\s+PASS\s+weekend-default-hidden',
+    '\[E2E3\]\s+PASS\s+weekend-draft-does-not-preview',
+    '\[E2E3\]\s+PASS\s+weekend-enabled-after-save',
+    '\[E2E3\]\s+PASS\s+seven-day-highlight-range',
+    '\[E2E3\]\s+PASS\s+weekend-cell-edit-saved',
+    '\[E2E3\]\s+PASS\s+copy-prev-week-includes-weekend',
+    '\[E2E3\]\s+PASS\s+weekend-hidden-data-retained',
+    '\[E2E3\]\s+PASS\s+weekend-reshow-restores-course',
+    '\[E2E3\]\s+PASS\s+weekend-keyboard-edit-cancel',
+    '\[E2E3\]\s+PASS\s+weekend-blur-save',
     '\[E2E4\]\s+PASS\s+',
     '\[E2E-FAIL\]\s+PASS\s+',
+    '\[E2E-FAIL\]\s+PASS\s+settings-weekend-keeps-committed-grid',
     '\[E2E-LAYOUT\]\s+PASS\s+',
+    '\[E2E-LAYOUT\]\s+PASS\s+five-day-minimum-grid',
+    '\[E2E-LAYOUT\]\s+PASS\s+seven-day-minimum-grid',
+    '\[E2E-LAYOUT\]\s+PASS\s+seven-day-scroll-contained',
+    '\[E2E-LAYOUT\]\s+PASS\s+seven-day-header-row-aligned',
     '\[E2E-SECURITY\]\s+PASS\s+',
     '\[SHOT\]\s+settingsOpen=true',
     '\[SHOT\]\s+resized to .*"width":46[01].*"height":32[01]'
   )
   Assert-ShotFile -Name 'dev-screenshot.png'
   Assert-ShotFile -Name 'dev-screenshot-copy-confirm.png'
+  Assert-ShotFile -Name 'dev-screenshot-weekend.png'
   Assert-ShotFile -Name 'dev-screenshot-settings.png'
 } catch {
   $failed = $true

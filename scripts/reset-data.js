@@ -26,6 +26,7 @@ const def = {
     periodsPerDay: 8,
     periodTimes: DEFAULT_PERIOD_TIMES,
     opacity: 0.65,
+    showWeekend: false,
     autoStart: false,
   },
   window: null,
